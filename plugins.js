@@ -50,11 +50,25 @@ Plugin.prototype.haraka_require = function (name) {
 
 Plugin.prototype.core_require = Plugin.prototype.haraka_require;
 
-function plugin_search_paths (prefix, name) {
+function plugin_search_paths(prefix, name) {
+    
+    var paths = exports.config.get('plugins.json').plugin_search_paths || [];
+    var additionalSearchPaths = [];
+
+    for (var i = 0; i < paths.length; i++){
+        additionalSearchPaths.push(
+            path.resolve(prefix, path[i], name + '.js'),
+            path.resolve(path[i], name + '.js'),
+            path.resolve(prefix, path[i], 'node_modules', 'haraka-plugin-' + name, 'package.json'),
+            path.resolve(path[i], 'node_modules', 'haraka-plugin-' + name, 'package.json'));
+    }
+    
+    logger.logdebug("Additional plugin search paths added: ", additionalSearchPaths);
+
     return [
         path.resolve(prefix, 'plugins', name + '.js'),
         path.resolve(prefix, 'node_modules', 'haraka-plugin-' + name, 'package.json'),
-    ];
+    ].concat(additionalSearchPaths);
 }
 
 Plugin.prototype._get_plugin_path = function () {
@@ -87,12 +101,13 @@ Plugin.prototype._get_plugin_path = function () {
     if (process.env.HARAKA) {
         // Installed mode - started via bin/haraka
         paths = paths.concat(plugin_search_paths(process.env.HARAKA, name));
-
+        
         // permit local "folder" plugins (/$name/package.json) (see #1649)
         paths.push(
             path.resolve(process.env.HARAKA, 'plugins', name, 'package.json'),
             path.resolve(process.env.HARAKA, 'node_modules', name, 'package.json')
         );
+        
     }
 
     // development mode
