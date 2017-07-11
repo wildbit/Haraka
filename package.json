@@ -2,6 +2,7 @@
   "author": "Matt Sergeant <helpme@gmail.com> (http://baudehlo.com/)",
   "name": "Haraka",
   "license": "MIT",
+  "version": "5.0.0",
   "description": "An SMTP Server project.",
   "keywords": [ "haraka", "smtp", "server", "email" ],
   "homepage": "http://haraka.github.io",
