@@ -4,13 +4,13 @@
   "license": "MIT",
   "description": "An SMTP Server project.",
   "keywords": [ "haraka", "smtp", "server", "email" ],
-  "version": "2.8.13",
   "homepage": "http://haraka.github.io",
   "repository": {
     "type": "git",
     "url": "git://github.com/haraka/Haraka.git"
   },
   "main": "haraka.js",
+  "types": "haraka.d.ts",
   "engines": {
     "node": ">= v4.6.2"
   },

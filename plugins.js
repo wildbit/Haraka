@@ -51,16 +51,17 @@ Plugin.prototype.haraka_require = function (name) {
 Plugin.prototype.core_require = Plugin.prototype.haraka_require;
 
 function plugin_search_paths(prefix, name) {
-    
-    var paths = exports.config.get('plugins.json').plugin_search_paths || [];
+    var getConfig = exports.config.get('plugins.json');
+    var paths = getConfig.plugin_search_paths || [];
     var additionalSearchPaths = [];
 
     for (var i = 0; i < paths.length; i++){
+        var apath = paths[i];
         additionalSearchPaths.push(
-            path.resolve(prefix, path[i], name + '.js'),
-            path.resolve(path[i], name + '.js'),
-            path.resolve(prefix, path[i], 'node_modules', 'haraka-plugin-' + name, 'package.json'),
-            path.resolve(path[i], 'node_modules', 'haraka-plugin-' + name, 'package.json'));
+            path.resolve(prefix, apath, name + '.js'),
+            path.resolve(apath, name + '.js'),
+            path.resolve(prefix, apath, 'node_modules', 'haraka-plugin-' + name, 'package.json'),
+            path.resolve(apath, 'node_modules', 'haraka-plugin-' + name, 'package.json'));
     }
     
     logger.logdebug("Additional plugin search paths added: ", additionalSearchPaths);
