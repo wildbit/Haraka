@@ -7,7 +7,7 @@ declare const DENYSOFT: any;
 declare const AUTH_METHOD_CRAM_MD5: any;
 
 declare namespace haraka {
-    interface AttachmentCallback { (content_type: string, filename: string, body: Body, stream: ReadableStream); }
+    interface AttachmentCallback { (content_type: string, filename: string, body: Body, stream: NodeJS.ReadableStream); }
     interface BodyFilterCallback { (content_type: string, encoding_name: string, buffer: Buffer); }
     interface MessageDataCallback { (data:string); }
 
