@@ -115,6 +115,7 @@ declare namespace haraka {
         header: Header;
         children: Body[];
         buf: Buffer;
+        buf_fill: number;
     }
 
     class Address{
