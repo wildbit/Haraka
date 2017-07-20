@@ -101,10 +101,16 @@ declare namespace haraka {
         clamd_style: boolean;
     }
 
+    class DecodedHeader{
+        Name: string
+        Value: string
+    }
+
     class Header{
         get(key: string): string;
         get_all(key: string): string[];
         get_decoded(key: string): string;
+        decoded_header_list: Array<DecodedHeader>
         lines(): string[];
         headers_decoded: object;
         toString(): string;

@@ -14,6 +14,7 @@ function Header (options) {
     this.headers = {};
     this.headers_decoded = {};
     this.header_list = [];
+    this.decoded_header_list = [];
     this.options = options;
 }
 
@@ -41,6 +42,8 @@ Header.prototype.parse = function (lines) {
             var val = match[2];
 
             this._add_header(key, val, "push");
+
+            this.decoded_header_list.push({ "Name" : key, "Value" : this.decode_header(val) });
         }
         else {
             logger.logerror("Header did not look right: " + this.header_list[i]);
@@ -246,7 +249,9 @@ Header.prototype.add = function (key, value) {
     }
     this._add_header(key.toLowerCase(), value, "unshift");
     this._add_header_decode(key.toLowerCase(), value, "unshift");
+    
     this.header_list.unshift(key + ': ' + value + '\n');
+    this.decoded_header_list.unshift({ "Name" : key, "Value" : this.decode_header(val) });
 };
 
 Header.prototype.add_end = function (key, value) {
