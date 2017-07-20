@@ -38,12 +38,13 @@ Header.prototype.parse = function (lines) {
     for (let i=0,l=this.header_list.length; i < l; i++) {
         var match = this.header_list[i].match(/^([^\s:]*):\s*([\s\S]*)$/);
         if (match) {
-            var key = match[1].toLowerCase();
+            var originalKey = match[1];
+            var key = originalKey.toLowerCase();
             var val = match[2];
 
             this._add_header(key, val, "push");
 
-            this.decoded_header_list.push({ "Name" : key, "Value" : this.decode_header(val) });
+            this.decoded_header_list.push({ "Name" : originalKey, "Value" : this.decode_header(val) });
         }
         else {
             logger.logerror("Header did not look right: " + this.header_list[i]);
