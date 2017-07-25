@@ -107,7 +107,9 @@ function _decode_rfc2231 (params) {
     return function (matched, str) {
         var sub_matches = /^(([^=]*)\*)(\d*)=(\s*".*?[^\\]";?|\S*)\s*$/.exec(str);
         if (!sub_matches) {
-            return " " + str;
+            // the original match captured folding leading space, but 
+            // this should be removed as part of unfolding a decoded header.
+            return str;
         }
         var key = sub_matches[1];
         var key_actual = sub_matches[2];
@@ -174,9 +176,6 @@ Header.prototype.decode_header = function decode_header (val) {
         val = val + '";';
     }
     
-    //remove leading folding space in headers.
-    val = val.replace(/^[ \t]{1}/, '');
-
     // remove end carriage return
     val = val.replace(/\r?\n$/, '');
     val = val.replace(/\([^\)]*\)/, ''); // strip 822 comments in the most basic way - does not support nested comments
