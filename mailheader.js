@@ -173,6 +173,9 @@ Header.prototype.decode_header = function decode_header (val) {
         }
         val = val + '";';
     }
+    
+    //remove leading folding space in headers.
+    val = val.replace(/^[ \t]{1}/, '');
 
     // remove end carriage return
     val = val.replace(/\r?\n$/, '');
