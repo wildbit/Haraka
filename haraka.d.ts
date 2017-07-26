@@ -120,8 +120,11 @@ declare namespace haraka {
         bodytext: string;
         header: Header;
         children: Body[];
-        buf: Buffer;
-        buf_fill: number;
+        attachment_stream: AttachmentStream;
+    }
+
+    class AttachmentStream extends ReadableStream {
+
     }
 
     class Address{
