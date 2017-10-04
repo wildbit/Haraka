@@ -424,16 +424,41 @@ Body.prototype.parse_attachment = function (line) {
 
 Body.prototype.decode_qp = utils.decode_qp;
 
-var decode_remainder = "";
-
 Body.prototype.decode_base64 = function (line) {
-    //number of bytes encoded in this line
-    var toProcess = this.decode_remainder + line;
-    var completeByteCount = Math.floor(toProcess.length / (8 / 6));
-    var emitNow = toProcess.substring(0, completeByteCount * (6 / 8));
-    this.decode_remainder = toProcess.substring(emitNow.length);
+    var toProcess = this.decode_remainder + line.trim();
     
-    return new Buffer(emitNow, 'base64');
+    // Sometimes base64 data lines will not be aligned with
+    // byte boundaries. This is because each char in base64
+    // represents 6 bits. 24 is the LCM between 6 and 8 bits.
+    // As a result, 24 bits is our word boundary for base64.
+    // 4 * 6-bit chars === 3 * bytes
+    // Failure to align here will result in truncated/incorrect
+    // node Buffers later on.
+    
+    // Walk back from the current length to the first 
+    // position that aligns with a 24-bit boundary.
+    emitLength -= toProcess.length - (emitLetoProcess.length % 4)
+    
+    if (emitLength > 0) {
+        //
+        var emitNow = toProcess.substring(0, emitLength);
+        this.decode_remainder = toProcess.substring(emitLength);
+        return new Buffer(emitNow, 'base64');
+    } else {
+        this.decode_remainder = '';
+
+        // This is the end of the base64 data, we don't really have enough bits
+        // to fill up the bytes, but that's because we're on the last line, and ==
+        // might have been elided.
+
+        // In order to prevent any weird boundary issues, let's 
+        // re-pad the string if there's any bytes. As above, our target
+        // is a 24-bit boundary, so 1-4 characters.
+        while (toProcess.length > 0 && toProcess.length < 4) {
+            toProcess += '=';
+        }
+        return new Buffer(toProcess, 'base64');
+    }    
 };
 
 Body.prototype.decode_8bit = function (line) {
