@@ -30,6 +30,7 @@ class Body extends events.EventEmitter {
         this.state = 'start';
         this.buf = new Buffer(buf_siz);
         this.buf_fill = 0;
+        this.decode_remainder = "";
     }
 }
 
@@ -378,6 +379,9 @@ Body.prototype.parse_multipart_preamble = function (line) {
 };
 
 Body.prototype.parse_attachment = function (line) {
+    // If we reach the end of the attachment, we'll should have a line that
+    // contains a boundary. If this is delineates a new MIME part, then return it.
+    // if this delineates the end of a multipart part, then set the state to "headers"
     if (this.boundary) {
         if (line.substr(0, (this.boundary.length + 2)) === ('--' + this.boundary)) {
             if (line.substr(this.boundary.length + 2, 2) === '--') {
@@ -420,8 +424,15 @@ Body.prototype.parse_attachment = function (line) {
 
 Body.prototype.decode_qp = utils.decode_qp;
 
+var decode_remainder = "";
+
 Body.prototype.decode_base64 = function (line) {
-    return new Buffer(line, 'base64');
+    //number of bytes encoded in this line
+    var toProcess = this.decode_remainder + line;
+    var completeByteCount = Math.floor(toProcess.length / (8 / 6));
+    var emitNow = toProcess.substring(0, completeByteCount * (6 / 8));
+    this.decode_remainder = toProcess.substring(emitNow.length);
+    return new Buffer(emitNow, 'base64');
 };
 
 Body.prototype.decode_8bit = function (line) {
