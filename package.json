@@ -10,11 +10,13 @@
     "type": "git",
     "url": "git://github.com/haraka/Haraka.git"
   },
+  "types": "haraka.d.ts",
   "main": "haraka.js",
   "engines": {
     "node": ">= v6.11.3"
   },
   "dependencies": {
+    "@types/node"           : "^8.0.16",
     "address-rfc2821"       : "^1.1.1",
     "address-rfc2822"       : "^2.0.0",
     "async"                 : "~2.5.0",
