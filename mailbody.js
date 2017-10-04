@@ -437,10 +437,9 @@ Body.prototype.decode_base64 = function (line) {
     
     // Walk back from the current length to the first 
     // position that aligns with a 24-bit boundary.
-    emitLength -= toProcess.length - (emitLetoProcess.length % 4)
+    var emitLength = toProcess.length - (toProcess.length % 4)
     
     if (emitLength > 0) {
-        //
         var emitNow = toProcess.substring(0, emitLength);
         this.decode_remainder = toProcess.substring(emitLength);
         return new Buffer(emitNow, 'base64');
