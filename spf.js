@@ -217,7 +217,7 @@ SPF.prototype.check_host = function (ip, domain, mail_from, cb) {
         var mod_array = [];
         var mech_regexp1 = /^([-+~?])?(all|a|mx|ptr)$/;
         var mech_regexp2 = /^([-+~?])?(a|mx|ptr|ip4|ip6|include|exists)((?::[^\/ ]+(?:\/\d+(?:\/\/\d+)?)?)|\/\d+(?:\/\/\d+)?)$/;
-        var mod_regexp = /^([^ =]+)=([a-z0-9._-]+)$/;
+        var mod_regexp = /^([^ =]+)=([a-z0-9:\/._-]+)$/;
         var split = spf_record.split(' ');
         for (i=1; i<split.length; i++) {
             // Skip blanks
@@ -603,7 +603,13 @@ SPF.prototype.mech_ptr = function (qualifier, args, cb) {
                             re = new RegExp(domain.replace('\.','\\.') + '$', 'i');
                         }
                         catch (e) {
-                            self.log_debug('mech_ptr: domain="' + self.domain + '" err="' + e.message + '"');
+                            self.log_debug(
+                                'mech_ptr',
+                                {
+                                    domain: self.domain,
+                                    err: e.message
+                                }
+                            );
                             return cb(null, self.SPF_PERMERROR);
                         }
                         for (var t=0; t<names.length; t++) {

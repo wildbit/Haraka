@@ -33,13 +33,19 @@ exports.load_qmail_queue_ini = function () {
 
 exports.hook_queue = function (next, connection) {
     var plugin = this;
+
+    const txn = connection.transaction;
+
+    const q_wants = txn.notes.get('queue.wants');
+    if (q_wants && q_wants !== 'qmail-queue') return next();
+
     var qmail_queue = childproc.spawn(
         this.queue_exec, // process name
         [],              // arguments
         { stdio: ['pipe', 'pipe', process.stderr] }
     );
 
-    var finished = function (code) {
+    qmail_queue.on('exit', function finished (code) {
         if (code !== 0) {
             connection.logerror(plugin, "Unable to queue message to qmail-queue: " + code);
             next();
@@ -47,11 +53,9 @@ exports.hook_queue = function (next, connection) {
         else {
             next(OK, "Queued!");
         }
-    };
+    });
 
-    qmail_queue.on('exit', finished);
-
-    connection.transaction.message_stream.pipe(qmail_queue.stdin);
+    connection.transaction.message_stream.pipe(qmail_queue.stdin, { line_endings: '\n' });
 
     qmail_queue.stdin.on('close', function () {
         if (!connection.transaction) {

@@ -1,14 +1,38 @@
 'use strict';
 // Log class
 
+var util      = require('util');
+var tty       = require('tty');
+
 var constants = require('haraka-constants');
 
 var config    = require('./config');
 var plugins;
 var connection;
 var outbound;
-var util      = require('util');
-var tty       = require('tty');
+
+const regex = /(^$|[ ="\\])/;
+const escape_replace_regex = /["\\]/g;
+
+function stringify (obj) {
+    var str = '';
+    var key;
+    for (key in obj) {
+        let v = obj[key];
+        if (v == null) {
+            str += `${key}="" `;
+            continue;
+        }
+        v = v.toString();
+        if (regex.test(v)) {
+            str += `${key}="${v.replace(escape_replace_regex, '\\$&')}" `;
+        }
+        else {
+            str += `${key}=${v} `;
+        }
+    }
+    return str.trim();
+}
 
 var logger = exports;
 
@@ -26,10 +50,17 @@ logger.levels = {
 };
 
 for (var le in logger.levels) {
+    logger.levels[`LOG${le}`] = logger.levels[le];
     logger['LOG' + le] = logger.levels[le];
 }
 
-logger.loglevel     = logger.LOGWARN;
+logger.formats = {
+    DEFAULT: "DEFAULT",
+    LOGFMT: "LOGFMT",
+};
+
+logger.loglevel      = logger.levels.WARN;
+logger.format        = logger.formats.DEFAULT;
 logger.deferred_logs = [];
 
 logger.colors = {
@@ -47,6 +78,28 @@ logger.colors = {
 
 var stdout_is_tty = tty.isatty(process.stdout.fd);
 
+logger._init = function () {
+    this.load_log_ini();
+    this._init_loglevel();
+    this._init_timestamps();
+}
+
+logger.load_log_ini = function () {
+    let self = this;
+    self.cfg = config.get('log.ini', {
+        booleans: [
+            '+main.timestamps',
+        ]
+    },
+    function () {
+        self.load_log_ini();
+    });
+
+    this.set_loglevel(this.cfg.main.level);
+    this.set_timestamps(this.cfg.main.timestamps);
+    this.set_format(this.cfg.main.format);
+}
+
 logger.colorize = function (color, str) {
     if (!util.inspect.colors[color]) { return str; }  // unknown color
     return '\u001b[' + util.inspect.colors[color][0] + 'm' + str +
@@ -56,13 +109,7 @@ logger.colorize = function (color, str) {
 logger.dump_logs = function (cb) {
     while (logger.deferred_logs.length > 0) {
         var log_item = logger.deferred_logs.shift();
-        var color = logger.colors[log_item.level];
-        if (color && stdout_is_tty) {
-            console.log(logger.colorize(color, log_item.data));
-        }
-        else {
-            console.log(log_item.data);
-        }
+        plugins.run_hooks('log', logger, log_item);
     }
     // Run callback after flush
     if (cb) process.stdout.write('', cb);
@@ -85,10 +132,10 @@ logger.dump_and_exit = function (code) {
 
 logger.log = function (level, data) {
     if (level === 'PROTOCOL') {
-        data = data.replace(/\n/g, '\\n\n');
+        data = data.replace(/\n/g, '\\n');
     }
     data = data.replace(/\r/g, '\\r')
-               .replace(/\n$/, '');
+        .replace(/\n$/, '');
 
     var item = { 'level' : level, 'data'  : data };
 
@@ -124,26 +171,48 @@ logger.log_respond = function (retval, msg, data) {
     return true;
 };
 
-logger._init_loglevel = function () {
-    var self = this;
-    var _loglevel = config.get('loglevel', 'value', function () {
-        self._init_loglevel();
-    });
-    if (_loglevel) {
-        var loglevel_num = parseInt(_loglevel);
-        if (!loglevel_num || isNaN(loglevel_num)) {
-            this.log('INFO', 'loglevel: ' + _loglevel.toUpperCase());
-            logger.loglevel = logger[_loglevel.toUpperCase()];
-        }
-        else {
-            logger.loglevel = loglevel_num;
-        }
-        if (!logger.loglevel) {
-            this.log('WARN', 'invalid loglevel: ' + _loglevel + ' defaulting to LOGWARN');
-            logger.loglevel = logger.LOGWARN;
-        }
+logger.set_loglevel = function (level) {
+
+    if (!level) return;
+
+    let loglevel_num = parseInt(level);
+    if (!loglevel_num || isNaN(loglevel_num)) {
+        this.log('INFO', 'loglevel: ' + level.toUpperCase());
+        logger.loglevel = logger.levels[level.toUpperCase()];
+    }
+    else {
+        logger.loglevel = loglevel_num;
+    }
+
+    if (!logger.loglevel) {
+        this.log('WARN', 'invalid loglevel: ' + level + ' defaulting to LOGWARN');
+        logger.loglevel = logger.levels.WARN;
+    }
+}
+
+logger.set_format = function (format) {
+    if (format) {
+        logger.format = logger.formats[format.toUpperCase()];
+        this.log('INFO', 'log format: ' + format.toUpperCase());
+    }
+    else {
+        logger.format = null;
+    }
+    if (!logger.format) {
+        this.log('WARN', 'invalid log format: ' + format + ' defaulting to DEFAULT');
+        logger.format = logger.formats.DEFAULT;
     }
 };
+
+logger._init_loglevel = function () {
+    let self = this;
+
+    let _loglevel = config.get('loglevel', 'value', function () {
+        self._init_loglevel();
+    });
+
+    self.set_loglevel(_loglevel);
+}
 
 logger.would_log = function (level) {
     if (logger.loglevel < level) { return false; }
@@ -152,70 +221,106 @@ logger.would_log = function (level) {
 
 var original_console_log = console.log;
 
+logger.set_timestamps = function (value) {
+
+    if (!value) {
+        console.log = original_console_log;
+        return;
+    }
+
+    console.log = function () {
+        let new_arguments = [new Date().toISOString()];
+        for (let key in arguments) {
+            new_arguments.push(arguments[key]);
+        }
+        original_console_log.apply(console, new_arguments);
+    };
+}
+
 logger._init_timestamps = function () {
-    var self = this;
-    var _timestamps = config.get('log_timestamps', 'value', function () {
+    let self = this;
+
+    let _timestamps = config.get('log_timestamps', 'value', function () {
         self._init_timestamps();
     });
 
-    if (_timestamps) {
-        console.log = function () {
-            var new_arguments = [new Date().toISOString()];
-            for (var key in arguments) {
-                new_arguments.push(arguments[key]);
-            }
-            original_console_log.apply(console, new_arguments);
-        };
-    }
-    else {
-        console.log = original_console_log;
-    }
+    this.set_timestamps(_timestamps);
 };
 
-logger._init_loglevel();
-logger._init_timestamps();
+logger._init();
 
 logger.log_if_level = function (level, key, plugin) {
     return function () {
         if (logger.loglevel < logger[key]) { return; }
-        var levelstr = '[' + level + ']';
-        var str = '';
-        var uuidstr = '[-]';
-        var pluginstr = '[' + (plugin || 'core') + ']';
+        var logobj = {
+            level,
+            uuid: '-',
+            origin: (plugin || 'core'),
+            message: ''
+        };
         for (var i=0; i < arguments.length; i++) {
             var data = arguments[i];
             if (typeof data !== 'object') {
-                str += data;
+                logobj.message += (data);
                 continue;
             }
             if (!data) continue;
 
             // if the object is a connection, add the connection id
             if (data instanceof connection.Connection) {
-                uuidstr = '[' + data.uuid;
+                logobj.uuid = data.uuid;
                 if (data.tran_count > 0) {
-                    uuidstr += "." + data.tran_count;
+                    logobj.uuid += "." + data.tran_count;
                 }
-                uuidstr += ']';
             }
             else if (data instanceof plugins.Plugin) {
-                pluginstr = '[' + data.name + ']';
+                logobj.origin = data.name;
             }
             else if (data.name) {
-                pluginstr = '[' + data.name + ']';
+                logobj.origin = data.name;
             }
             else if (data instanceof outbound.HMailItem) {
-                pluginstr = '[outbound]';
+                logobj.origin = 'outbound';
                 if (data.todo && data.todo.uuid) {
-                    uuidstr = '[' + data.todo.uuid + ']';
+                    logobj.uuid = data.todo.uuid;
                 }
             }
+            else if (
+                logger.format === logger.formats.LOGFMT &&
+                data.constructor === Object
+            ) {
+                logobj = Object.assign(logobj, data);
+            }
+            else if (data.constructor === Object) {
+                if (!logobj.message.endsWith(' ')) {
+                    logobj.message += ' ';
+                }
+                logobj.message += (stringify(data));
+            }
             else {
-                str += util.inspect(data);
+                logobj.message += (util.inspect(data));
             }
         }
-        logger.log(level, [levelstr, uuidstr, pluginstr, str].join(' '));
-        return true;
+        switch (logger.format) {
+            case logger.formats.LOGFMT:
+                logger.log(
+                    level,
+                    stringify(logobj)
+                );
+                return true;
+            case logger.formats.DEFAULT:
+            default:
+                logger.log(
+                    level,
+                    [
+                        '[' + logobj.level + ']',
+                        '[' + logobj.uuid + ']',
+                        '[' + logobj.origin + ']',
+                        logobj.message
+                    ].join(' ')
+                );
+                return true;
+        }
     };
 };
 

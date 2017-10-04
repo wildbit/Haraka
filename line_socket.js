@@ -2,15 +2,15 @@
 // A subclass of Socket which reads data by line
 
 var net   = require('net');
-var util  = require('util');
 var utils = require('haraka-utils');
 
-var tls  = require('./tls_socket');
+var tls_socket = require('./tls_socket');
 
-function Socket (options) {
-    if (!(this instanceof Socket)) return new Socket(options);
-    net.Socket.call(this, options);
-    setup_line_processor(this);
+class Socket extends net.Socket {
+    constructor (options) {
+        super(options);
+        setup_line_processor(this);
+    }
 }
 
 function setup_line_processor (socket) {
@@ -36,8 +36,6 @@ function setup_line_processor (socket) {
     socket.on('end',  function ()     { socket.process_end();     });
 }
 
-util.inherits(Socket, net.Socket);
-
 exports.Socket = Socket;
 
 // New interface - uses TLS
@@ -51,7 +49,7 @@ exports.connect = function (port, host, cb) {
         options.port = port;
         options.host = host;
     }
-    var sock = tls.connect(options, cb);
+    var sock = tls_socket.connect(options, cb);
     setup_line_processor(sock);
     return sock;
 };

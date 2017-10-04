@@ -1,12 +1,12 @@
 // backscatterer plugin
 
-exports.register = function() {
+exports.register = function () {
     this.inherits('dns_list_base');
 };
 
 exports.hook_mail = function (next, connection, params) {
     var user = ((params[0] && params[0].user) ?
-               params[0].user.toLowerCase() : null);
+        params[0].user.toLowerCase() : null);
     if (!(!user || user === 'postmaster')) return next();
     // Check remote IP on ips.backscatterer.org
     var plugin = this;

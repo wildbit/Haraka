@@ -55,6 +55,7 @@ exports.get_options = function (connection) {
     var plugin = this;
 
     // https://rspamd.com/doc/architecture/protocol.html
+    // https://github.com/vstakhov/rspamd/blob/master/rules/http_headers.lua
     var options = {
         headers: {},
         port: plugin.cfg.main.port,
@@ -80,6 +81,17 @@ exports.get_options = function (connection) {
     }
 
     if (connection.hello.host) options.headers.Helo = connection.hello.host;
+
+    let spf = connection.transaction.results.get('spf');
+    if (spf && spf.result) {
+        options.headers.SPF = { result: spf.result.toLowerCase() };
+    }
+    else {
+        spf = connection.results.get('spf');
+        if (spf && spf.result) {
+            options.headers.SPF = { result: spf.result.toLowerCase() };
+        }
+    }
 
     if (connection.transaction.mail_from) {
         var mfaddr = connection.transaction.mail_from.address().toString();
@@ -131,6 +143,8 @@ exports.hook_data_post = function (next, connection) {
     }
 
     timer = setTimeout(function () {
+        if (!connection) return;
+        if (!connection.transaction) return;
         connection.transaction.results.add(plugin, {err: 'timeout'});
         callNext();
     }, timeout * 1000);
@@ -149,13 +163,12 @@ exports.hook_data_post = function (next, connection) {
                 if (!r.data) return callNext();
                 if (!r.data.default) return callNext();
                 if (!r.log) return callNext();
+
                 r.log.emit = true; // spit out a log entry
+                r.log.time = (Date.now() - start)/1000;
 
                 if (!connection.transaction) return callNext();
                 connection.transaction.results.add(plugin, r.log);
-                connection.transaction.results.add(plugin, {
-                    time: (Date.now() - start)/1000,
-                });
 
                 function no_reject () {
                     if (cfg.dkim.enabled && r.data['dkim-signature']) {
@@ -163,21 +176,20 @@ exports.hook_data_post = function (next, connection) {
                     }
                     if (cfg.rmilter_headers.enabled && r.rmilter) {
                         if (r.rmilter.remove_headers) {
-                            Object.keys(r.rmilter.remove_headers).forEach(function(key) {
+                            Object.keys(r.rmilter.remove_headers).forEach(function (key) {
                                 connection.transaction.remove_header(key);
                             })
                         }
                         if (r.rmilter.add_headers) {
-                            Object.keys(r.rmilter.add_headers).forEach(function(key) {
+                            Object.keys(r.rmilter.add_headers).forEach(function (key) {
                                 connection.transaction.add_header(key, r.rmilter.add_headers[key]);
                             })
                         }
                     }
                     if (cfg.soft_reject.enabled && r.data.default.action === 'soft reject') {
                         return callNext(DENYSOFT, DSN.sec_unauthorized(cfg.soft_reject.message, 451));
-                    } else if (cfg.main.add_headers !== 'never' && (
-                               cfg.main.add_headers === 'always' ||
-                               (r.data.default.action === 'add header' && cfg.main.add_headers === 'sometimes'))) {
+                    }
+                    if (plugin.wants_headers_added(r.data)) {
                         plugin.add_headers(connection, r.data);
                     }
                     return callNext();
@@ -194,9 +206,20 @@ exports.hook_data_post = function (next, connection) {
 
     req.on('error', function (err) {
         if (!connection || !connection.transaction) return;
-        connection.transaction.results.add(plugin, err.message);
+        connection.transaction.results.add(plugin, { err: err.message});
         return callNext();
     });
+};
+
+exports.wants_headers_added = function (rspamd_data) {
+    var plugin = this;
+
+    if (plugin.cfg.main.add_headers === 'never') return false;
+    if (plugin.cfg.main.add_headers === 'always') return true;
+
+    // implicit add_headers=sometimes, based on rspamd response
+    if (rspamd_data.default.action === 'add header') return true;
+    return false;
 };
 
 exports.parse_response = function (rawData, connection) {
@@ -263,12 +286,12 @@ exports.add_headers = function (connection, data) {
         var spamBar = '';
         var spamBarScore = 1;
         var spamBarChar = cfg.spambar.neutral || '/';
-        if (data.score >= 1) {
-            spamBarScore = Math.floor(data.score);
+        if (data.default.score >= 1) {
+            spamBarScore = Math.floor(data.default.score);
             spamBarChar = cfg.spambar.positive || '+';
         }
-        else if (data.score <= -1) {
-            spamBarScore = Math.floor(data.score * -1);
+        else if (data.default.score <= -1) {
+            spamBarScore = Math.floor(data.default.score * -1);
             spamBarChar = cfg.spambar.negative || '-';
         }
         for (var i = 0; i < spamBarScore; i++) {
@@ -293,6 +316,6 @@ exports.add_headers = function (connection, data) {
 
     if (cfg.header && cfg.header.score) {
         connection.transaction.remove_header(cfg.header.score);
-        connection.transaction.add_header(cfg.header.score, '' + data.score);
+        connection.transaction.add_header(cfg.header.score, '' + data.default.score);
     }
 };

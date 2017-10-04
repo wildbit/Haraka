@@ -24,7 +24,7 @@ exports.load_ini = function () {
             '^(?:0\\.0\\.0\\.0|255\\.255\\.255\\.255|127\\.)' );
 };
 
-exports.hook_mail = function(next, connection, params) {
+exports.hook_mail = function (next, connection, params) {
     var plugin    = this;
     var mail_from = params[0];
     var txn       = connection.transaction;
@@ -55,7 +55,7 @@ exports.hook_mail = function(next, connection, params) {
     };
 
     // IS: IPv6 compatible
-    dns.resolveMx(domain, function(err, addresses) {
+    dns.resolveMx(domain, function (err, addresses) {
         if (!txn) return;
         if (err && plugin.mxErr(connection, domain, 'MX', err, mxDone)) return;
 
@@ -78,7 +78,7 @@ exports.hook_mail = function(next, connection, params) {
             }
             results.add(plugin, {fail: 'has_fwd_dns'});
             return mxDone(((c.reject_no_mx) ? DENY : DENYSOFT),
-                    'MX without A/AAAA records');
+                'MX without A/AAAA records');
         }
 
         addresses.forEach(function (addr) {
@@ -93,7 +93,7 @@ exports.hook_mail = function(next, connection, params) {
                 return;
             }
             pending_queries++;
-            net_utils.get_ips_by_host(addr.exchange, function(err2, addresses2) {
+            net_utils.get_ips_by_host(addr.exchange, function (err2, addresses2) {
                 pending_queries--;
                 if (!txn) return;
                 if (err2 && err2.length === 2) {
@@ -156,12 +156,12 @@ exports.implicit_mx = function (connection, domain, mxDone) {
     var plugin = this;
     var txn = connection.transaction;
 
-    net_utils.get_ips_by_host(domain, function(err, addresses) {
+    net_utils.get_ips_by_host(domain, function (err, addresses) {
         if (!txn) return;
         if (!addresses || !addresses.length) {
             txn.results.add(plugin, {fail: 'has_fwd_dns'});
             return mxDone(((plugin.cfg.main.reject_no_mx) ? DENY : DENYSOFT),
-                    'No MX for your FROM address');
+                'No MX for your FROM address');
         }
 
         connection.logdebug(plugin, domain + ': A/AAAA => ' + addresses);

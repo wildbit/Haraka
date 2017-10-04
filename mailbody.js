@@ -1,36 +1,38 @@
 'use strict';
 
+var events = require('events');
+var utils  = require('haraka-utils');
+
 // Mail Body Parser
 var logger = require('./logger');
 var Header = require('./mailheader').Header;
-var utils  = require('haraka-utils');
 var config = require('./config');
-var events = require('events');
-var util   = require('util');
 var Iconv  = require('./mailheader').Iconv;
 var attstr = require('./attachment_stream');
 
 var buf_siz = config.get('mailparser.bufsize') || 65536;
 
-function Body (header, options) {
-    this.header = header || new Header();
-    this.header_lines = [];
-    this.is_html = false;
-    this.options = options || {};
-    this.filters = [];
-    this.bodytext = '';
-    this.body_text_encoded = '';
-    this.body_encoding = null;
-    this.boundary = null;
-    this.ct = null;
-    this.decode_function = null;
-    this.children = []; // if multipart
-    this.state = 'start';
-    this.buf = new Buffer(buf_siz);
-    this.buf_fill = 0;
+class Body extends events.EventEmitter {
+    constructor (header, options) {
+        super();
+        this.header = header || new Header();
+        this.header_lines = [];
+        this.is_html = false;
+        this.options = options || {};
+        this.filters = [];
+        this.bodytext = '';
+        this.body_text_encoded = '';
+        this.body_encoding = null;
+        this.boundary = null;
+        this.ct = null;
+        this.decode_function = null;
+        this.children = []; // if multipart
+        this.state = 'start';
+        this.buf = new Buffer(buf_siz);
+        this.buf_fill = 0;
+    }
 }
 
-util.inherits(Body, events.EventEmitter);
 exports.Body = Body;
 
 Body.prototype.add_filter = function (filter) {
@@ -113,14 +115,14 @@ Body.prototype.parse_start = function (line) {
         this.state = 'body';
     }
     else if (/^multipart\//i.test(ct)) {
-        match = ct.match(/boundary\s*=\s*["']?([^"';]+)["']?/i);
+        match = ct.match(/boundary\s*=\s*"?([^";]+)"?/i);
         this.boundary = match ? match[1] : '';
         this.state = 'multipart_preamble';
     }
     else {
-        match = cd.match(/name\s*=\s*["']?([^'";]+)["']?/i);
+        match = cd.match(/name\s*=\s*"?([^";]+)"?/i);
         if (!match) {
-            match = ct.match(/name\s*=\s*["']?([^'";]+)["']?/i);
+            match = ct.match(/name\s*=\s*"?([^";]+)"?/i);
         }
         var filename = match ? match[1] : '';
         this.attachment_stream = attstr.createStream(this.header);
@@ -235,6 +237,18 @@ Body.prototype._empty_filter = function (ct, enc) {
     });
 
     return new_buf.toString("binary");
+}
+
+Body.prototype.force_end = function () {
+    if (this.state === 'attachment') {
+        if (this.buf_fill > 0) {
+            // see below for why we create a new buffer here.
+            var to_emit = new Buffer(this.buf_fill);
+            this.buf.copy(to_emit, 0, 0, this.buf_fill);
+            this.attachment_stream.emit_data(to_emit);
+        }
+        this.attachment_stream.emit_end(true);
+    }
 }
 
 Body.prototype.parse_end = function (line) {

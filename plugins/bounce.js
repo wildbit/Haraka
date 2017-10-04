@@ -82,11 +82,11 @@ exports.reject_all = function (next, connection, params) {
     }
 
     connection.transaction.results.add(plugin,
-            {fail: 'bounces_accepted', emit: true });
+        {fail: 'bounces_accepted', emit: true });
     return next(DENY, "No bounces accepted here");
 };
 
-exports.single_recipient = function(next, connection) {
+exports.single_recipient = function (next, connection) {
     var plugin = this;
     if (!plugin.cfg.check.single_recipient) return next();
     if (!plugin.has_null_sender(connection)) return next();
@@ -96,7 +96,7 @@ exports.single_recipient = function(next, connection) {
     // Valid bounces have a single recipient
     if (connection.transaction.rcpt_to.length === 1) {
         transaction.results.add(plugin,
-                {pass: 'single_recipient', emit: true });
+            {pass: 'single_recipient', emit: true });
         return next();
     }
 
@@ -107,12 +107,12 @@ exports.single_recipient = function(next, connection) {
     // checked (not sure if this is default or not)
     if (connection.relaying) {
         transaction.results.add(plugin,
-                {skip: 'single_recipient(relay)', emit: true });
+            {skip: 'single_recipient(relay)', emit: true });
         return next();
     }
     if (connection.remote.is_private) {
         transaction.results.add(plugin,
-                {skip: 'single_recipient(private_ip)', emit: true });
+            {skip: 'single_recipient(private_ip)', emit: true });
         return next();
     }
 
@@ -126,7 +126,7 @@ exports.single_recipient = function(next, connection) {
     return next(DENY, "this bounce message does not have 1 recipient");
 };
 
-exports.empty_return_path = function(next, connection) {
+exports.empty_return_path = function (next, connection) {
     var plugin = this;
     if (!plugin.cfg.check.empty_return_path) return next();
     if (!plugin.has_null_sender(connection)) return next();
@@ -205,7 +205,7 @@ var message_id_re = /^Message-ID:\s*(<?[^>]+>?)/mig;
 function find_message_id_headers (headers, body, connection, self) {
     if (!body) return;
     var match;
-    while (match = message_id_re.exec(body.bodytext)) {
+    while ((match = message_id_re.exec(body.bodytext))) {
         var mid = match[1];
         headers[mid] = true;
     }
@@ -258,7 +258,7 @@ exports.non_local_msgid = function (next, connection) {
 
     if (domains.length === 0) {
         connection.loginfo(plugin,
-                'no domain(s) parsed from Message-ID headers');
+            'no domain(s) parsed from Message-ID headers');
         transaction.results.add(plugin, { fail: 'Message-ID parseable' });
         if (!plugin.cfg.reject.non_local_msgid) return next();
         return next(DENY, "bounce with invalid Message-ID, I didn't send it.");
@@ -288,10 +288,10 @@ exports.non_local_msgid = function (next, connection) {
         - hence I added the return next() above or this test can never be correct.
     */
     // we wouldn't have accepted the bounce if the recipient wasn't local
-    transaction.results.add(plugin,
-            {fail: 'Message-ID not local', emit: true });
-    if (!plugin.cfg.reject.non_local_msgid) return next();
-    return next(DENY, "bounce with non-local Message-ID (RFC 3834)");
+    // transaction.results.add(plugin,
+    //         {fail: 'Message-ID not local', emit: true });
+    // if (!plugin.cfg.reject.non_local_msgid) return next();
+    // return next(DENY, "bounce with non-local Message-ID (RFC 3834)");
 };
 
 // Lazy regexp to get IPs from Received: headers in bounces
@@ -300,7 +300,7 @@ var received_re = net_utils.get_ipany_re('^Received:[\\s\\S]*?[\\[\\(](?:IPv6:)?
 function find_received_headers (ips, body, connection, self) {
     if (!body) return;
     var match;
-    while (match = received_re.exec(body.bodytext)) {
+    while ((match = received_re.exec(body.bodytext))) {
         var ip = match[1];
         if (net_utils.is_private_ip(ip)) continue;
         ips[ip] = true;
@@ -373,7 +373,7 @@ exports.bounce_spf = function (next, connection) {
                                             'spf_result=' + spf.result(result));
                 switch (result) {
                     case (spf.SPF_NONE):
-                        // Abort as domain doesn't publish an SPF record
+                        // falls through, domain doesn't publish an SPF record
                     case (spf.SPF_TEMPERROR):
                     case (spf.SPF_PERMERROR):
                         // Abort as all subsequent lookups will return this
@@ -381,14 +381,12 @@ exports.bounce_spf = function (next, connection) {
                                                     spf.result(result));
                         txn.results.add(plugin, { skip: 'bounce_spf' });
                         return run_cb(true);
-                        break;
                     case (spf.SPF_PASS):
                         // Presume this is a valid bounce
                         // TODO: this could be spoofed; could weight each IP to combat
                         connection.loginfo(plugin, 'Valid bounce originated from ' + ip);
                         txn.results.add(plugin, { pass: 'bounce_spf' });
                         return run_cb(true);
-                        break;
                 }
                 if (pending === 0 && !aborted) {
                     // We've checked all the IPs and none of them returned Pass

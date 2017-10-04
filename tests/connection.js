@@ -67,7 +67,6 @@ exports.connectionRaw = {
             advertised: false,
             verified: false,
             cipher: {},
-            authorized: null,
         });
         // backwards compat, sunset v3.0.0
         test.equal(this.connection.using_tls, false);
@@ -81,33 +80,33 @@ exports.connectionRaw = {
     'queue_msg, defined' : function (test) {
         test.expect(1);
         test.equal(
-                'test message',
-                this.connection.queue_msg(1, 'test message')
-                );
+            'test message',
+            this.connection.queue_msg(1, 'test message')
+        );
         test.done();
     },
     'queue_msg, default deny' : function (test) {
         test.expect(2);
         test.equal(
-                'Message denied',
-                this.connection.queue_msg(DENY)
-                );
+            'Message denied',
+            this.connection.queue_msg(DENY)
+        );
         test.equal(
-                'Message denied',
-                this.connection.queue_msg(DENYDISCONNECT)
-                );
+            'Message denied',
+            this.connection.queue_msg(DENYDISCONNECT)
+        );
         test.done();
     },
     'queue_msg, default denysoft' : function (test) {
         test.expect(2);
         test.equal(
-                'Message denied temporarily',
-                this.connection.queue_msg(DENYSOFT)
-                );
+            'Message denied temporarily',
+            this.connection.queue_msg(DENYSOFT)
+        );
         test.equal(
-                'Message denied temporarily',
-                this.connection.queue_msg(DENYSOFTDISCONNECT)
-                );
+            'Message denied temporarily',
+            this.connection.queue_msg(DENYSOFTDISCONNECT)
+        );
         test.done();
     },
     'queue_msg, default else' : function (test) {
@@ -163,7 +162,7 @@ exports.connectionRaw = {
         test.expect(4);
         this.connection.set('proxy', 'ip', '172.16.15.1');
         this.connection.set('proxy', 'type', 'haproxy');
-        this.connection.set('proxy', 'timer', setTimeout(function() {}, 1000));
+        this.connection.set('proxy', 'timer', setTimeout(function () {}, 1000));
         this.connection.set('proxy', 'allowed', true);
 
         test.equal(true, this.connection.proxy.allowed);

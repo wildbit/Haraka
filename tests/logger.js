@@ -1,11 +1,11 @@
 
 var util         = require('util');
 
-function _set_up(callback) {
+function _set_up (callback) {
     this.logger = require('../logger');
     callback();
 }
-function _tear_down(callback) {
+function _tear_down (callback) {
     callback();
 }
 
@@ -35,6 +35,95 @@ exports.log = {
         this.logger.plugins = { plugin_list: true };
         this.logger.deferred_logs.push( { level: 'INFO', data: 'log test info'} );
         test.ok(this.logger.log('INFO', 'another test info'));
+        test.done();
+    },
+    'log in logfmt' : function (test) {
+        this.logger.deferred_logs = [];
+        test.expect(3);
+        this.logger.format = this.logger.formats.LOGFMT;
+        test.equal(0, this.logger.deferred_logs.length);
+        test.ok(this.logger.log('WARN','test warning'));
+        test.equal(1, this.logger.deferred_logs.length);
+        test.done();
+    },
+    'log in logfmt w/deffered' : function (test) {
+        test.expect(1);
+        this.logger.plugins = { plugin_list: true };
+        this.logger.deferred_logs.push( { level: 'INFO', data: 'log test info'} );
+        test.ok(this.logger.log('INFO', 'another test info'));
+        test.done();
+    },
+};
+
+exports.level = {
+    setUp : _set_up,
+    tearDown : _tear_down,
+    'both INFO and LOGINFO are log levels' : function (test) {
+        test.expect(2);
+        test.equal(this.logger.levels.INFO, 6);
+        test.equal(this.logger.levels.LOGINFO, 6);
+        test.done();
+    },
+}
+
+exports.set_format = {
+    setUp : _set_up,
+    tearDown : _tear_down,
+    'set format to DEFAULT' : function (test) {
+        test.expect(1);
+        this.logger.format = '';
+        this.logger.set_format('DEFAULT');
+        test.equal(this.logger.format, this.logger.formats.DEFAULT);
+        test.done();
+    },
+    'set format to LOGFMT' : function (test) {
+        test.expect(1);
+        this.logger.format = '';
+        this.logger.set_format('LOGFMT');
+        test.equal(this.logger.format, this.logger.formats.LOGFMT);
+        test.done();
+    },
+    'set format to WARN if empty' : function (test) {
+        test.expect(1);
+        this.logger.format = '';
+        this.logger.set_format('');
+        test.equal(this.logger.format, this.logger.formats.DEFAULT);
+        test.done();
+    },
+    'set format to WARN if invalid' : function (test) {
+        test.expect(1);
+        this.logger.format = '';
+        this.logger.set_format('invalid');
+        test.equal(this.logger.format, this.logger.formats.DEFAULT);
+        test.done();
+    },
+}
+
+exports.set_loglevel = {
+    setUp : _set_up,
+    tearDown : _tear_down,
+    'set loglevel to LOGINFO' : function (test) {
+        test.expect(1);
+        this.logger.set_loglevel('LOGINFO');
+        test.equal(this.logger.loglevel, this.logger.levels.LOGINFO);
+        test.done();
+    },
+    'set loglevel to INFO' : function (test) {
+        test.expect(1);
+        this.logger.set_loglevel('INFO');
+        test.equal(this.logger.loglevel, this.logger.levels.INFO);
+        test.done();
+    },
+    'set loglevel to 6' : function (test) {
+        test.expect(1);
+        this.logger.set_loglevel(6);
+        test.equal(this.logger.loglevel, 6);
+        test.done();
+    },
+    'set loglevel to WARN if invalid' : function (test) {
+        test.expect(1);
+        this.logger.set_loglevel('invalid');
+        test.equal(this.logger.loglevel, this.logger.levels.WARN);
         test.done();
     },
 };
@@ -167,7 +256,7 @@ exports.add_log_methods = {
     'ignores non-objects' : function (test) {
         test.expect(2);
         test.equal(undefined, this.logger.add_log_methods(''));
-        test.equal(undefined, this.logger.add_log_methods(function foo(){}));
+        test.equal(undefined, this.logger.add_log_methods(function foo (){}));
         test.done();
     },
     'adds functions to an object' : function (test) {
