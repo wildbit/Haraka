@@ -432,6 +432,7 @@ Body.prototype.decode_base64 = function (line) {
     var completeByteCount = Math.floor(toProcess.length / (8 / 6));
     var emitNow = toProcess.substring(0, completeByteCount * (6 / 8));
     this.decode_remainder = toProcess.substring(emitNow.length);
+    
     return new Buffer(emitNow, 'base64');
 };
 

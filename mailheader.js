@@ -14,6 +14,7 @@ function Header (options) {
     this.headers = {};
     this.headers_decoded = {};
     this.header_list = [];
+    this.decoded_header_list = [];
     this.options = options;
 }
 
@@ -37,7 +38,8 @@ Header.prototype.parse = function (lines) {
     for (let i=0,l=this.header_list.length; i < l; i++) {
         var match = this.header_list[i].match(/^([^\s:]*):\s*([\s\S]*)$/);
         if (match) {
-            var key = match[1].toLowerCase();
+            var originalKey = match[1];
+            var key = originalKey.toLowerCase();
             var val = match[2];
 
             this._add_header(key, val, "push");
