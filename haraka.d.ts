@@ -123,7 +123,7 @@ declare namespace haraka {
         attachment_stream: AttachmentStream;
     }
 
-    class AttachmentStream extends ReadableStream {
+    interface AttachmentStream extends NodeJS.ReadableStream {
 
     }
 
