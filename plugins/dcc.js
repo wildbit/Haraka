@@ -21,7 +21,7 @@ exports.hook_data_post = function (next, connection) {
 
     var rcpts = txn.rcpt_to.map(function (rcpt) { return rcpt.address(); });
     var training = (txn.notes.training_mode && txn.notes.training_mode === 'spam')
-                   ? true : false;
+        ? true : false;
     var response = '';
     var client = net.createConnection({
         path: '/var/dcc/dccifd'
@@ -61,13 +61,13 @@ exports.hook_data_post = function (next, connection) {
         var result = rl.shift();
         switch (result) {
             case 'A':
-                // Accept
+                // Accept, fall through
             case 'G':
-                // Greylist
+                // Greylist, fall through
             case 'R':
-                // Reject
+                // Reject, fall through
             case 'S':
-                // Accept for some recipients
+                // Accept for some recipients, fall through
             case 'T':
                 // Temporary failure
                 break;

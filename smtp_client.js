@@ -2,25 +2,24 @@
 // SMTP client object and class. This allows every part of the client
 // protocol to be hooked for different levels of control, such as
 // smtp_forward and smtp_proxy queue plugins.
-// This newer version can use HostPool to get a connection to a pool of
+// It can use HostPool to get a connection to a pool of
 // possible hosts in the configuration value "forwarding_host_pool", rather
 // than a bunch of connections to a single host from the configuration values
 // in "host" and "port" (see host_pool.js).
 
 // node.js builtins
 var events       = require('events');
-var util         = require('util');
 
 // npm deps
 var generic_pool = require('generic-pool');
 var ipaddr       = require('ipaddr.js');
+var net_utils    = require('haraka-net-utils');
+var utils        = require('haraka-utils');
 
 // haraka libs
 var line_socket = require('./line_socket');
 var logger      = require('./logger');
-var utils       = require('haraka-utils');
 var HostPool    = require('./host_pool');
-var net_utils   = require('haraka-net-utils');
 
 var smtp_regexp = /^([0-9]{3})([ -])(.*)/;
 var STATE = {
@@ -30,178 +29,173 @@ var STATE = {
     DESTROYED: 4,
 };
 
-function SMTPClient (port, host, connect_timeout, idle_timeout) {
-    events.EventEmitter.call(this);
-    this.uuid = utils.uuid();
-    this.connect_timeout = parseInt(connect_timeout) || 30;
-    this.socket = line_socket.connect(port, host);
-    this.socket.setTimeout(this.connect_timeout * 1000);
-    this.socket.setKeepAlive(true);
-    this.state = STATE.IDLE;
-    this.command = 'greeting';
-    this.response = [];
-    this.connected = false;
-    this.authenticated = false;
-    this.auth_capabilities = [];
-    this.host = host;
-    this.port = port;
-    var client = this;
+class SMTPClient extends events.EventEmitter {
+    constructor (port, host, connect_timeout, idle_timeout, socket) {
+        super();
+        this.uuid = utils.uuid();
+        this.connect_timeout = parseInt(connect_timeout) || 30;
+        this.socket =  socket || line_socket.connect(port, host);
+        this.socket.setTimeout(this.connect_timeout * 1000);
+        this.socket.setKeepAlive(true);
+        this.state = STATE.IDLE;
+        this.command = 'greeting';
+        this.response = [];
+        this.connected = false;
+        this.authenticating=false;
+        this.authenticated = false;
+        this.auth_capabilities = [];
+        this.host = host;
+        this.port = port;
+        this.smtputf8 = false;
 
-    this.socket.on('line', function (line) {
-        client.emit('server_protocol', line);
-        var matches = smtp_regexp.exec(line);
-        if (!matches) {
-            client.emit('error', client.uuid + ': Unrecognized response from upstream server: ' + line);
-            client.destroy();
-            return;
-        }
+        var client = this;
 
-        var code = matches[1];
-        var cont = matches[2];
-        var msg = matches[3];
-
-        client.response.push(msg);
-        if (cont !== ' ') {
-            return;
-        }
-
-        if (client.command === 'auth') {
-            if (code.match(/^3/) && cont === 'VXNlcm5hbWU6') {
-                client.emit('auth_username');
-                return;
-            }
-            else if (code.match(/^3/) && cont === 'UGFzc3dvcmQ6') {
-                client.emit('auth_password');
-                return;
-            }
-        }
-
-        if (client.command === 'ehlo') {
-            if (code.match(/^5/)) {
-                // Handle fallback to HELO if EHLO is rejected
-                client.emit('greeting', 'HELO');
-                return;
-            }
-            client.emit('capabilities');
-            if (client.command !== 'ehlo') {
-                return;
-            }
-        }
-        if (client.command === 'xclient' && code.match(/^5/)) {
-            // XCLIENT command was rejected (no permission?)
-            // Carry on without XCLIENT
-            client.command = 'helo';
-        }
-        else if (code.match(/^[45]/)) {
-            client.emit('bad_code', code, client.response.join(' '));
-            if (client.state !== STATE.ACTIVE) {
-                return;
-            }
-        }
-        switch (client.command) {
-            case 'xclient':
-                client.xclient = true;
-                client.emit('xclient', 'EHLO');
-                break;
-            case 'starttls':
-                this.upgrade(this.tls_options);
-                break;
-            case 'greeting':
-                client.connected = true;
-                client.emit('greeting', 'EHLO');
-                break;
-            case 'ehlo':
-                client.emit('helo');
-                break;
-            case 'helo':
-            case 'mail':
-            case 'rcpt':
-            case 'data':
-            case 'dot':
-            case 'rset':
-            case 'auth':
-                client.emit(client.command);
-                break;
-            case 'quit':
-                client.emit('quit');
+        client.socket.on('line', function (line) {
+            client.emit('server_protocol', line);
+            var matches = smtp_regexp.exec(line);
+            if (!matches) {
+                client.emit('error', client.uuid + ': Unrecognized response from upstream server: ' + line);
                 client.destroy();
-                break;
-            default:
-                throw new Error("Unknown command: " + client.command);
-        }
-    });
-
-    this.socket.on('connect', function () {
-        // Remove connection timeout and set idle timeout
-        client.socket.setTimeout(((idle_timeout) ? idle_timeout : 300) * 1000);
-        if (client.socket.remoteAddress) {
-            // "Value may be undefined if the socket is destroyed"
-            client.remote_ip = ipaddr.process(client.socket.remoteAddress).toString();
-        }
-        else {
-            logger.logerror('client.socket.remoteAddress undefined!');
-        }
-    });
-
-    var closed = function (msg) {
-        return function (error) {
-            if (!error) {
-                error = '';
+                return;
             }
-            // msg is e.g. "errored" or "timed out"
-            // error is e.g. "Error: connect ECONNREFUSE"
-            var errMsg = client.uuid +
-                ': [' + client.host + ':' + client.port + '] ' +
-                'SMTP connection ' + msg + ' ' + error;
-            switch (client.state) {
-                case STATE.ACTIVE:
-                case STATE.IDLE:
-                case STATE.RELEASED:
+
+            var code = matches[1];
+            var cont = matches[2];
+            var msg = matches[3];
+
+            client.response.push(msg);
+            if (cont !== ' ') return;
+
+            if (client.command === 'auth' || client.authenticating) {
+                logger.loginfo('SERVER RESPONSE, CLIENT ' + client.command + ", authenticating=" + client.authenticating + ",code="+code + ",cont="+cont+",msg=" +msg);
+                if (code.match(/^3/) && msg === 'VXNlcm5hbWU6') {
+                    client.emit('auth_username');
+                    return;
+                }
+                if (code.match(/^3/) && msg === 'UGFzc3dvcmQ6') {
+                    client.emit('auth_password');
+                    return;
+                }
+                if (code.match(/^2/) && client.authenticating) {
+                    logger.loginfo('AUTHENTICATED');
+                    client.authenticating = false;
+                    client.authenticated = true;
+                    client.emit('auth');
+                    return;
+                }
+            }
+
+            if (client.command === 'ehlo') {
+                if (code.match(/^5/)) {
+                    // Handle fallback to HELO if EHLO is rejected
+                    client.emit('greeting', 'HELO');
+                    return;
+                }
+                client.emit('capabilities');
+                if (client.command !== 'ehlo') {
+                    return;
+                }
+            }
+            if (client.command === 'xclient' && code.match(/^5/)) {
+                // XCLIENT command was rejected (no permission?)
+                // Carry on without XCLIENT
+                client.command = 'helo';
+            }
+            else if (code.match(/^[45]/)) {
+                client.emit('bad_code', code, client.response.join(' '));
+                if (client.state !== STATE.ACTIVE) {
+                    return;
+                }
+            }
+            switch (client.command) {
+                case 'xclient':
+                    client.xclient = true;
+                    client.emit('xclient', 'EHLO');
+                    break;
+                case 'starttls':
+                    client.upgrade(client.tls_options);
+                    break;
+                case 'greeting':
+                    client.connected = true;
+                    client.emit('greeting', 'EHLO');
+                    break;
+                case 'ehlo':
+                    client.emit('helo');
+                    break;
+                case 'helo':
+                case 'mail':
+                case 'rcpt':
+                case 'data':
+                case 'dot':
+                case 'rset':
+                case 'auth':
+                    client.emit(client.command);
+                    break;
+                case 'quit':
+                    client.emit('quit');
                     client.destroy();
                     break;
                 default:
+                    throw new Error("Unknown command: " + client.command);
             }
-            if (client.state === STATE.ACTIVE) {
-                client.emit('error', errMsg);
+        });
+
+        client.socket.on('connect', function () {
+            // Remove connection timeout and set idle timeout
+            client.socket.setTimeout(((idle_timeout) ? idle_timeout : 300) * 1000);
+            if (!client.socket.remoteAddress) {
+                // "Value may be undefined if the socket is destroyed"
+                logger.logdebug('socket.remoteAddress undefined');
                 return;
             }
-            if ((msg === 'errored' || msg === 'timed out')
-                  && client.state === STATE.DESTROYED){
-                client.emit('connection-error', errMsg);
-            } // don't return, continue (original behavior)
+            client.remote_ip = ipaddr.process(client.socket.remoteAddress).toString();
+        });
 
-            logger.logdebug('[smtp_client_pool] ' + errMsg + ' (state=' + client.state + ')');
+        var closed = function (msg) {
+            return function (error) {
+                if (!error) {
+                    error = '';
+                }
+                // msg is e.g. "errored" or "timed out"
+                // error is e.g. "Error: connect ECONNREFUSE"
+                var errMsg = client.uuid +
+                    ': [' + client.host + ':' + client.port + '] ' +
+                    'SMTP connection ' + msg + ' ' + error;
+                switch (client.state) {
+                    case STATE.ACTIVE:
+                    case STATE.IDLE:
+                    case STATE.RELEASED:
+                        client.destroy();
+                        break;
+                    default:
+                }
+                if (client.state === STATE.ACTIVE) {
+                    client.emit('error', errMsg);
+                    return;
+                }
+                if ((msg === 'errored' || msg === 'timed out')
+                      && client.state === STATE.DESTROYED){
+                    client.emit('connection-error', errMsg);
+                } // don't return, continue (original behavior)
+
+                logger.logdebug('[smtp_client_pool] ' + errMsg + ' (state=' + client.state + ')');
+            };
         };
-    };
 
-    this.socket.on('error',   closed('errored'));
-    this.socket.on('timeout', closed('timed out'));
-    this.socket.on('close',   closed('closed'));
-    this.socket.on('end',     closed('ended'));
+        client.socket.on('error',   closed('errored'));
+        client.socket.on('timeout', closed('timed out'));
+        client.socket.on('close',   closed('closed'));
+        client.socket.on('end',     closed('ended'));
+    }
 }
 
-util.inherits(SMTPClient, events.EventEmitter);
-
-SMTPClient.prototype.load_tls_config = function (plugin) {
+SMTPClient.prototype.load_tls_config = function (opts) {
     var tls_options = {};
-    this.tls_config = net_utils.load_tls_ini();
-    var config_options = ['key','cert','ciphers','requestCert','rejectUnauthorized'];
-
-    for (let i = 0; i < config_options.length; i++) {
-        let opt = config_options[i];
-        if (this.tls_config.main[opt] === undefined) { continue; }
-        tls_options[opt] = this.tls_config.main[opt];
+    if (opts) {
+        for (var k in opts) tls_options[k]=opts[k];
     }
 
-    if (this.tls_config[plugin.name]) {
-        for (let i = 0; i < config_options.length; i++) {
-            let opt = config_options[i];
-            if (this.tls_config[plugin.name][opt] === undefined) { continue; }
-            tls_options[opt] = this.tls_config[plugin.name][opt];
-        }
-    }
-
-    if (this.host) { tls_options.servername = this.host }
+    if (this.host) tls_options.servername = this.host;
 
     this.tls_options = tls_options;
 }
@@ -271,6 +265,23 @@ SMTPClient.prototype.destroy = function () {
     }
 };
 
+SMTPClient.prototype.upgrade = function (tls_options) {
+    var this_logger = logger;
+
+    this.socket.upgrade(tls_options, function (authorized, verifyError, cert, cipher) {
+        this_logger.loginfo('secured:' +
+            ((cipher) ? ' cipher=' + cipher.name + ' version=' + cipher.version : '') +
+            ' verified=' + authorized +
+            ((verifyError) ? ' error="' + verifyError + '"' : '' ) +
+            ((cert && cert.subject) ? ' cn="' + cert.subject.CN + '"' +
+            ' organization="' + cert.subject.O + '"' : '') +
+            ((cert && cert.issuer) ? ' issuer="' + cert.issuer.O + '"' : '') +
+            ((cert && cert.valid_to) ? ' expires="' + cert.valid_to + '"' : '') +
+            ((cert && cert.fingerprint) ? ' fingerprint=' + cert.fingerprint : ''));
+    });
+};
+
+
 SMTPClient.prototype.is_dead_sender = function (plugin, connection) {
     if (connection.transaction) { return false; }
 
@@ -280,62 +291,113 @@ SMTPClient.prototype.is_dead_sender = function (plugin, connection) {
     return true;
 };
 
+exports.smtp_client = SMTPClient;
+
 // Separate pools are kept for each set of server attributes.
-exports.get_pool = function (server, port, host, connect_timeout, pool_timeout, max) {
+exports.get_pool = function (server, port, host, cfg) {
     port = port || 25;
     host = host || 'localhost';
-    connect_timeout = (connect_timeout === undefined) ? 30 : connect_timeout;
-    pool_timeout = (pool_timeout === undefined) ? 300 : pool_timeout;
+    if (cfg === undefined) cfg = {};
+    var connect_timeout = cfg.connect_timeout || 30;
+    var pool_timeout = cfg.pool_timeout || cfg.timeout || 300;
     var name = port + ':' + host + ':' + pool_timeout;
     if (!server.notes.pool) {
         server.notes.pool = {};
     }
-    if (!server.notes.pool[name]) {
-        var pool = generic_pool.Pool({
-            name: name,
-            create: function (callback) {
-                var smtp_client = new SMTPClient(port, host, connect_timeout);
-                logger.logdebug('[smtp_client_pool] uuid=' + smtp_client.uuid + ' host=' +
-                    host + ' port=' + port + ' pool_timeout=' + pool_timeout + ' created');
-                callback(null, smtp_client);
-            },
-            destroy: function (smtp_client) {
-                logger.logdebug('[smtp_client_pool] ' + smtp_client.uuid + ' destroyed, state=' + smtp_client.state);
-                smtp_client.state = STATE.DESTROYED;
-                smtp_client.socket.destroy();
-                // Remove pool object from server notes once empty
-                var size = pool.getPoolSize();
-                if (size === 0) {
-                    delete server.notes.pool[name];
-                }
-            },
-            max: max || 1000,
-            idleTimeoutMillis: pool_timeout * 1000,
-            log: function (str, level) {
-                level = (level === 'verbose') ? 'debug' : level;
-                logger['log' + level]('[smtp_client_pool] [' + name + '] ' + str);
-            }
-        });
-
-        var acquire = pool.acquire;
-        pool.acquire = function (callback, priority) {
-            var callback_wrapper = function (err, smtp_client) {
-                smtp_client.pool = pool;
-                smtp_client.state = STATE.ACTIVE;
-                callback(err, smtp_client);
-            };
-            acquire.call(pool, callback_wrapper, priority);
-        };
-        server.notes.pool[name] = pool;
+    if (server.notes.pool[name]) {
+        return server.notes.pool[name];
     }
-    return server.notes.pool[name];
+
+    var pool = generic_pool.Pool({
+        name: name,
+        create: function (callback) {
+            var smtp_client = new SMTPClient(port, host, connect_timeout);
+            logger.logdebug('[smtp_client_pool] uuid=' + smtp_client.uuid + ' host=' +
+                host + ' port=' + port + ' pool_timeout=' + pool_timeout + ' created');
+            callback(null, smtp_client);
+        },
+        destroy: function (smtp_client) {
+            logger.logdebug('[smtp_client_pool] ' + smtp_client.uuid + ' destroyed, state=' + smtp_client.state);
+            smtp_client.state = STATE.DESTROYED;
+            smtp_client.socket.destroy();
+            // Remove pool object from server notes once empty
+            var size = pool.getPoolSize();
+            if (size === 0) {
+                delete server.notes.pool[name];
+            }
+        },
+        max: cfg.max_connections || 1000,
+        idleTimeoutMillis: (pool_timeout -1) * 1000,
+        log: function (str, level) {
+            level = (level === 'verbose') ? 'debug' : level;
+            logger['log' + level]('[smtp_client_pool] [' + name + '] ' + str);
+        }
+    });
+
+    var acquire = pool.acquire;
+    pool.acquire = function (callback, priority) {
+        var callback_wrapper = function (err, smtp_client) {
+            smtp_client.pool = pool;
+            smtp_client.state = STATE.ACTIVE;
+            callback(err, smtp_client);
+        };
+        acquire.call(pool, callback_wrapper, priority);
+    };
+    server.notes.pool[name] = pool;
+    return pool;
 };
 
 // Get a smtp_client for the given attributes.
-exports.get_client = function (server, callback, port, host, connect_timeout, pool_timeout, max) {
-    var pool = exports.get_pool(server, port, host, connect_timeout, pool_timeout, max);
+exports.get_client = function (server, callback, port, host, cfg) {
+    var pool = exports.get_pool(server, port, host, cfg);
     pool.acquire(callback);
 };
+
+
+exports.onCapabilitiesOutbound = function (smtp_client, secured, connection, config, on_secured) {
+    for (var line in smtp_client.response) {
+        if (smtp_client.response[line].match(/^XCLIENT/)) {
+            if (!smtp_client.xclient) {
+                smtp_client.send_command('XCLIENT', 'ADDR=' + connection.remote.ip);
+                return;
+            }
+        }
+
+        if (smtp_client.response[line].match(/^SMTPUTF8/)) {
+            smtp_client.smtputf8 = true;
+        }
+
+        if (smtp_client.response[line].match(/^STARTTLS/) && !secured) {
+
+            var hostBanned = false
+            var serverBanned = false
+
+            // Check if there are any banned TLS hosts
+            if (smtp_client.tls_options.no_tls_hosts) {
+                // If there are check if these hosts are in the blacklist
+                hostBanned = net_utils.ip_in_list(smtp_client.tls_config.no_tls_hosts, config.host);
+                serverBanned = net_utils.ip_in_list(smtp_client.tls_config.no_tls_hosts, smtp_client.remote_ip);
+            }
+
+            if (!hostBanned && !serverBanned && config.enable_tls)
+            {
+                smtp_client.socket.on('secure', on_secured);
+                smtp_client.secured = false;  // have to wait in forward plugin before we can do auth, even if capabilities are there on first EHLO
+                smtp_client.send_command('STARTTLS');
+                return;
+            }
+        }
+
+        var auth_matches = smtp_client.response[line].match(/^AUTH (.*)$/);
+        if (auth_matches) {
+            smtp_client.auth_capabilities = [];
+            auth_matches = auth_matches[1].split(' ');
+            for (var i = 0; i < auth_matches.length; i++) {
+                smtp_client.auth_capabilities.push(auth_matches[i].toLowerCase());
+            }
+        }
+    }
+}
 
 // Get a smtp_client for the given attributes and set up the common
 // config and listeners for plugins. This is what smtp_proxy and
@@ -352,17 +414,16 @@ exports.get_client_plugin = function (plugin, connection, c, callback) {
         }
     }
 
-    var hostport = get_hostport(connection, connection.server.notes, c);
+    var hostport = get_hostport(connection, connection.server, c);
 
-    var pool = exports.get_pool(connection.server, hostport.port, hostport.host,
-                                c.connect_timeout, c.timeout, c.max_connections);
+    var pool = exports.get_pool(connection.server, hostport.port, hostport.host, c);
 
     pool.acquire(function (err, smtp_client) {
         connection.logdebug(plugin, 'Got smtp_client: ' + smtp_client.uuid);
 
         var secured = false;
 
-        smtp_client.load_tls_config(plugin);
+        smtp_client.load_tls_config(plugin.tls_options);
 
         smtp_client.call_next = function (retval, msg) {
             if (this.next) {
@@ -391,39 +452,14 @@ exports.get_client_plugin = function (plugin, connection, c, callback) {
         smtp_client.on('greeting', helo);
         smtp_client.on('xclient', helo);
 
+        var on_secured = function () {
+            secured = true;
+            smtp_client.secured = true;
+            smtp_client.emit('greeting', 'EHLO');
+        };
+
         smtp_client.on('capabilities', function () {
-            var on_secured = function () {
-                secured = true;
-                smtp_client.emit('greeting', 'EHLO');
-            };
-            for (var line in smtp_client.response) {
-                if (smtp_client.response[line].match(/^XCLIENT/)) {
-                    if (!smtp_client.xclient) {
-                        smtp_client.send_command('XCLIENT', 'ADDR=' + connection.remote.ip);
-                        return;
-                    }
-                }
-
-                if (smtp_client.response[line].match(/^STARTTLS/) && !secured) {
-                    if (!net_utils.ip_in_list(smtp_client.tls_config.no_tls_hosts, c.host) &&
-                        !net_utils.ip_in_list(smtp_client.tls_config.no_tls_hosts, smtp_client.remote_ip) &&
-                        c.enable_tls)
-                    {
-                        smtp_client.socket.on('secure', on_secured);
-                        smtp_client.send_command('STARTTLS');
-                        return;
-                    }
-                }
-
-                var auth_matches = smtp_client.response[line].match(/^AUTH (.*)$/);
-                if (auth_matches) {
-                    smtp_client.auth_capabilities = [];
-                    auth_matches = auth_matches[1].split(' ');
-                    for (var i = 0; i < auth_matches.length; i++) {
-                        smtp_client.auth_capabilities.push(auth_matches[i].toLowerCase());
-                    }
-                }
-            }
+            exports.onCapabilitiesOutbound(smtp_client, secured, connection, c, on_secured);
         });
 
         smtp_client.on('helo', function () {
@@ -431,7 +467,7 @@ exports.get_client_plugin = function (plugin, connection, c, callback) {
                 if (smtp_client.is_dead_sender(plugin, connection)) {
                     return;
                 }
-                smtp_client.send_command('MAIL', 'FROM:' + connection.transaction.mail_from);
+                smtp_client.send_command('MAIL', 'FROM:' + connection.transaction.mail_from.format(!smtp_client.smtp_utf8));
                 return;
             }
 
@@ -457,11 +493,15 @@ exports.get_client_plugin = function (plugin, connection, c, callback) {
         });
 
         smtp_client.on('auth', function () {
+            // if authentication has been handled by plugin(s)
+            if (smtp_client.authenticating) {
+                return;
+            }
             if (smtp_client.is_dead_sender(plugin, connection)) {
                 return;
             }
             smtp_client.authenticated = true;
-            smtp_client.send_command('MAIL', 'FROM:' + connection.transaction.mail_from);
+            smtp_client.send_command('MAIL', 'FROM:' + connection.transaction.mail_from.format(!smtp_client.smtp_utf8));
         });
 
         // these errors only get thrown when the connection is still active
@@ -495,35 +535,31 @@ exports.get_client_plugin = function (plugin, connection, c, callback) {
     });
 };
 
-function get_hostport (connection, server_notes, config_arg) {
+function get_hostport (connection, server, cfg) {
 
-    var c = config_arg;
-    if (c.forwarding_host_pool){
-        if (! server_notes.host_pool){
-            connection.logwarn("creating a new host_pool from " + c.forwarding_host_pool);
-            server_notes.host_pool =
+    if (cfg.forwarding_host_pool) {
+        if (! server.notes.host_pool) {
+            connection.logwarn("creating host_pool from " + cfg.forwarding_host_pool);
+            server.notes.host_pool =
                 new HostPool(
-                    c.forwarding_host_pool, // "1.2.3.4:420,  5.6.7.8:420
-                    c.dead_forwarding_host_retry_secs
+                    cfg.forwarding_host_pool, // 1.2.3.4:420, 5.6.7.8:420
+                    cfg.dead_forwarding_host_retry_secs
                 );
         }
-        var host_pool = server_notes.host_pool;
 
-        var host = host_pool.get_host();
-        if (! host){
-            logger.logerror('[smtp_client_pool] no backend hosts in pool!');
-            throw new Error("no backend hosts found in pool!");
+        var host = server.notes.host_pool.get_host();
+        if (host) {
+            return host; // { host: 1.2.3.4, port: 567 }
         }
+        logger.logerror('[smtp_client_pool] no backend hosts in pool!');
+        throw new Error("no backend hosts found in pool!");
+    }
 
-        return host; // { host: 1.2.3.4, port: 567 }
+    if (cfg.host && cfg.port) {
+        return { host: cfg.host, port: cfg.port };
     }
-    else if (c.host && c.port){
-        return { host: c.host, port: c.port };
-    }
-    else {
-        // current behavior in get_pool is to default to localhost:25
-        logger.logwarn("[smtp_client_pool] forwarding_host_pool or host and port " +
-                "were not found in config file");
-        throw new Error("You must specify either forwarding_host_pool or host and port");
-    }
+
+    logger.logwarn("[smtp_client_pool] forwarding_host_pool or host and port " +
+            "were not found in config file");
+    throw new Error("You must specify either forwarding_host_pool or host and port");
 }

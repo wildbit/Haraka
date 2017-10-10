@@ -161,9 +161,9 @@ exports.hook_mail = function (next, connection, params) {
             return next();
         }
         plugin.log_result(connection, 'mfrom', host, mfrom,
-                          spf.result(result), (ip ? ip : connection.remote.ip));
+            spf.result(result), (ip ? ip : connection.remote.ip));
         plugin.save_to_header(connection, spf, result, mfrom, host,
-                              'mailfrom', (ip ? ip : connection.remote.ip));
+            'mailfrom', (ip ? ip : connection.remote.ip));
 
         auth_result = spf.result(result).toLowerCase();
         connection.auth_results( "spf="+auth_result+" smtp.mailfrom="+host);
@@ -190,7 +190,7 @@ exports.hook_mail = function (next, connection, params) {
     }
 
     // outbound (relaying), context=myself
-    net_utils.get_public_ip(function(e, my_public_ip) {
+    net_utils.get_public_ip(function (e, my_public_ip) {
         // We always check the client IP first, because a relay
         // could be sending inbound mail from a non-local domain
         // which could case an incorrect SPF Fail result if we
@@ -230,7 +230,7 @@ exports.log_result = function (connection, scope, host, mfrom, result, ip) {
     ].join(' '));
 };
 
-exports.return_results = function(next, connection, spf, scope, result, sender) {
+exports.return_results = function (next, connection, spf, scope, result, sender) {
     var plugin = this;
     var msgpre = 'sender ' + sender;
     var deny = connection.relaying ? 'deny_relay' : 'deny';

@@ -4,13 +4,18 @@ var fs           = require('fs');
 var path         = require('path');
 
 var fixtures     = require('haraka-test-fixtures');
-
-var Connection   = fixtures.connection;
 var Plugin       = fixtures.plugin;
 
 var _set_up = function (done) {
     this.plugin = new Plugin('tls');
-    this.connection = Connection.createConnection();
+    this.connection = new fixtures.connection.createConnection();
+
+    // use tests/config instead of ./config
+    this.plugin.config =
+        this.plugin.config.module_config(path.resolve('tests'));
+    this.plugin.net_utils.config =
+        this.plugin.net_utils.config.module_config(path.resolve('tests'));
+
     this.plugin.tls_opts = {};
     done();
 };
@@ -72,12 +77,13 @@ exports.load_tls_ini = {
     setUp : _set_up,
     'loads test/config/tls.ini' : function (test) {
         tls_ini_overload(this.plugin);
-
-        test.expect(4);
+        test.expect(6);
         test.equal(true, this.plugin.cfg.main.requestCert);
         test.ok(this.plugin.cfg.main.ciphers);
         test.ok(this.plugin.cfg.no_tls_hosts);
         test.equal(true, this.plugin.cfg.main.honorCipherOrder);
+        test.equal('outbound_tls_key.pem', this.plugin.cfg.outbound.key);
+        test.equal('outbound_tls_cert.pem', this.plugin.cfg.outbound.cert);
         test.done();
     }
 };
@@ -134,7 +140,7 @@ exports.dont_register = {
     setUp : function (done) {
         this.plugin = new Plugin('tls');
 
-        // overload load_pem to get files from tests/config
+        // overload load_pem
         this.plugin.load_pem = function (file) {
             try {
                 return fs.readFileSync('./non-exist/config/' + file);

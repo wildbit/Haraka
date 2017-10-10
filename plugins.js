@@ -50,7 +50,7 @@ Plugin.prototype.haraka_require = function (name) {
 
 Plugin.prototype.core_require = Plugin.prototype.haraka_require;
 
-function plugin_search_paths(prefix, name) {
+function plugin_search_paths (prefix, name) {
     var getConfig = exports.config.get('plugins.json');
     var paths = getConfig.plugin_search_paths || [];
     var additionalSearchPaths = [];
@@ -69,6 +69,7 @@ function plugin_search_paths(prefix, name) {
     return [
         path.resolve(prefix, 'plugins', name + '.js'),
         path.resolve(prefix, 'node_modules', 'haraka-plugin-' + name, 'package.json'),
+        path.resolve(prefix, '..', 'haraka-plugin-' + name, 'package.json')
     ].concat(additionalSearchPaths);
 }
 
@@ -94,7 +95,6 @@ Plugin.prototype._get_plugin_path = function () {
     plugin.hasPackageJson = false;
     var name = plugin.name;
     if (/^haraka\-plugin\-/.test(name)) {
-        logger.lognotice("the haraka-plugin- prefix is not required in config/plugins");
         name = name.replace(/^haraka\-plugin\-/, '');
     }
 
@@ -102,13 +102,12 @@ Plugin.prototype._get_plugin_path = function () {
     if (process.env.HARAKA) {
         // Installed mode - started via bin/haraka
         paths = paths.concat(plugin_search_paths(process.env.HARAKA, name));
-        
+
         // permit local "folder" plugins (/$name/package.json) (see #1649)
         paths.push(
             path.resolve(process.env.HARAKA, 'plugins', name, 'package.json'),
             path.resolve(process.env.HARAKA, 'node_modules', name, 'package.json')
         );
-        
     }
 
     // development mode
@@ -180,7 +179,8 @@ Plugin.prototype.inherits = function (parent_name) {
         if (!this[method]) {
             this[method] = parent_plugin[method];
         }
-        // else if (method == 'shutdown') { // Method is in this module, so it exists in the plugin
+        // else if (method == 'shutdown') {
+        //     Method is in this module, so it exists in the plugin
         //     if (!this.hasOwnProperty('shutdown')) {
         //         this[method] = parent_plugin[method];
         //     }
@@ -552,7 +552,7 @@ function log_run_item (item, hook, retval, object, params, msg) {
             'plugin='   + item[0].name,
             'function=' + item[1],
             'params="'  + ((params) ? ((typeof params === 'string') ?
-                            params : params[0]) : '') + '"',
+                params : params[0]) : '') + '"',
             'retval='   + constants.translate(retval),
             'msg="'     + ((msg) ? msg : '') + '"',
         ].join(' '));

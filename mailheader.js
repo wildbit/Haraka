@@ -52,8 +52,8 @@ Header.prototype.parse = function (lines) {
     }
 
     // Now add decoded versions
-    Object.keys(this.headers).forEach(function (key2) {
-        self.headers[key2].forEach(function (val2) {
+    Object.keys(this.headers).forEach((key2) => {
+        self.headers[key2].forEach((val2) => {
             self._add_header_decode(key2, val2, 'push');
         })
     })
@@ -107,7 +107,7 @@ function _decode_rfc2231 (params) {
     return function (matched, str) {
         var sub_matches = /^(([^=]*)\*)(\d*)=(\s*".*?[^\\]";?|\S*)\s*$/.exec(str);
         if (!sub_matches) {
-            return matched;
+            return " " + str;
         }
         var key = sub_matches[1];
         var key_actual = sub_matches[2];
@@ -161,6 +161,7 @@ Header.prototype.decode_header = function decode_header (val) {
         cur_enc: '',
         cur_lang: '', // Secondary languages are ignored for our purposes
     };
+
     val = val.replace(/\n[ \t]+([^\n]*)/g, _decode_rfc2231(rfc2231_params));
     for (var key in rfc2231_params.keys) {
         val = val + ' ' + key + '="';
@@ -173,12 +174,10 @@ Header.prototype.decode_header = function decode_header (val) {
         }
         val = val + '";';
     }
-    
-    //remove the first leading space after \r\n, this is added for header folding.
-    val = val.replace(/\r?\n[ \t]{1}/g, '');
 
     // remove end carriage return
     val = val.replace(/\r?\n$/, '');
+
     // strip 822 comments in the most basic way - does not support nested comments
     // val = val.replace(/\([^\)]*\)/, '');
 
@@ -254,7 +253,6 @@ Header.prototype.add = function (key, value) {
     }
     this._add_header(key.toLowerCase(), value, "unshift");
     this._add_header_decode(key.toLowerCase(), value, "unshift");
-    
     this.header_list.unshift(key + ': ' + value + '\n');
     this.decoded_header_list.unshift({ "Name" : key, "Value" : this.decode_header(val) });
 };

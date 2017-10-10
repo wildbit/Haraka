@@ -1,19 +1,18 @@
-"use strict";
+'use strict';
 
 var Stream = require('stream');
-var util   = require('util');
 
-function AttachmentStream (header) {
-    Stream.call(this);
-    this.header = header;
-    this.encoding = null;
-    this.paused = false;
-    this.end_emitted = false;
-    this.connection = null;
-    this.buffer = [];
+class AttachmentStream extends Stream {
+    constructor (header) {
+        super();
+        this.header = header;
+        this.encoding = null;
+        this.paused = false;
+        this.end_emitted = false;
+        this.connection = null;
+        this.buffer = [];
+    }
 }
-
-util.inherits(AttachmentStream, Stream);
 
 AttachmentStream.prototype.emit_data = function (data) {
     // console.log("YYY: DATA emit");
@@ -29,13 +28,18 @@ AttachmentStream.prototype.emit_data = function (data) {
     }
 };
 
-AttachmentStream.prototype.emit_end = function () {
-    if (this.paused) {
+AttachmentStream.prototype.emit_end = function (force) {
+    if (this.paused && !force) {
         // console.log("YYY: end emit (cache)");
         this.end_emitted = true;
     }
     else {
         // console.log("YYY: end emit");
+        if (this.buffer.length > 0) {
+            while (this.buffer.length > 0) {
+                this.emit_data(this.buffer.shift());
+            }
+        }
         this.emit('end');
     }
 };

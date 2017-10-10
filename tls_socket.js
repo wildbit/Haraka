@@ -12,26 +12,26 @@ var EventEmitter = require('events');
 
 var ocsp;
 try {
-    ocsp      = require('ocsp');
-} catch (er) {
+    ocsp = require('ocsp');
+}
+catch (er) {
     log.lognotice("Can't load module ocsp. OCSP Stapling not available.");
-    ocsp = null;
 }
 
 // provides a common socket for attaching
 // and detaching from either main socket, or crypto socket
-function pluggableStream (socket) {
-    stream.Stream.call(this);
-    this.readable = this.writable = true;
-    this._timeout = 0;
-    this._keepalive = false;
-    this._writeState = true;
-    this._pending = [];
-    this._pendingCallbacks = [];
-    if (socket) this.attach(socket);
+class pluggableStream extends stream.Stream {
+    constructor (socket) {
+        super();
+        this.readable = this.writable = true;
+        this._timeout = 0;
+        this._keepalive = false;
+        this._writeState = true;
+        this._pending = [];
+        this._pendingCallbacks = [];
+        if (socket) this.attach(socket);
+    }
 }
-
-util.inherits(pluggableStream, stream.Stream);
 
 pluggableStream.prototype.pause = function () {
     if (this.targetsocket.pause) {
@@ -137,6 +137,10 @@ pluggableStream.prototype.setKeepAlive = function (bool) {
 pluggableStream.prototype.setNoDelay = function (/* true||false */) {
 };
 
+pluggableStream.prototype.unref = function () {
+    return this.targetsocket.unref();
+};
+
 pluggableStream.prototype.setTimeout = function (timeout) {
     this._timeout = timeout;
     return this.targetsocket.setTimeout(timeout);
@@ -146,9 +150,6 @@ function pipe (cleartext, socket) {
     cleartext.socket = socket;
 
     function onerror (e) {
-        if (cleartext._controlReleased) {
-            cleartext.emit('error', e);
-        }
     }
 
     function onclose () {
@@ -160,12 +161,13 @@ function pipe (cleartext, socket) {
     socket.on('close', onclose);
 }
 
-function pseudoTLSServer () {
-    EventEmitter.call(this);
+class pseudoTLSServer extends EventEmitter {
+    constructor () {
+        super();
+    }
 }
 
 if (ocsp) {
-    util.inherits(pseudoTLSServer, EventEmitter);
 
     var ocspCache = new ocsp.Cache();
     var pseudoServ = new pseudoTLSServer();
@@ -175,6 +177,9 @@ if (ocsp) {
             log.logdebug('OCSP Request, URI: ' + uri + ', err=' +err);
             if (err) {
                 return cb2(err);
+            }
+            if (uri === null) {   // not working OCSP server
+                return cb2();
             }
 
             var req = ocsp.request.generate(cert, issuer);
@@ -210,18 +215,14 @@ exports.ocsp = ocsp;
 function _getSecureContext (options) {
     if (options === undefined) options = {};
 
-    if (options.requestCert === undefined) {
-        options.requestCert = true;
-    }
+    if (options.requestCert === undefined) options.requestCert = true;
+
     if (options.rejectUnauthorized === undefined) {
         options.rejectUnauthorized = false;
     }
-    if (!options.sessionIdContext) {
-        options.sessionIdContext = 'haraka';
-    }
-    if (!options.sessionTimeout) {
-        // options.sessionTimeout = 1;
-    }
+
+    if (!options.sessionIdContext) options.sessionIdContext = 'haraka';
+    // if (!options.sessionTimeout) options.sessionTimeout = 1;
 
     return tls.createSecureContext(options);
 }
@@ -238,19 +239,15 @@ function createServer (cb) {
             cryptoSocket.removeAllListeners('data');
 
             if (!options) options = {};
+            options.isServer = true;
 
             if (!options.secureContext) {
-
                 options.secureContext = _getSecureContext(options);
-                options.isServer = true;
-                if (options.enableOCSPStapling) {
-                    if (ocsp) {
-                        options.server = pseudoServ;
-                        pseudoServ._sharedCreds = options.secureContext;
-                    } else {
-                        log.logerror("OCSP Stapling cannot be enabled because the ocsp module is not loaded");
-                    }
-                }
+            }
+
+            if (options.enableOCSPStapling && ocsp) {
+                options.server = pseudoServ;
+                pseudoServ._sharedCreds = options.secureContext;
             }
 
             var cleartext = new tls.TLSSocket(cryptoSocket, options);
@@ -263,16 +260,13 @@ function createServer (cb) {
 
             cleartext.on('secure', function () {
                 log.logdebug('TLS secured.');
-                var cert = cleartext.getPeerCertificate();
-                if (cleartext.getCipher) {
-                    var cipher = cleartext.getCipher();
-                }
                 socket.emit('secure');
                 if (cb2) cb2(cleartext.authorized,
-                    cleartext.authorizationError, cert, cipher);
+                    cleartext.authorizationError,
+                    cleartext.getPeerCertificate(),
+                    cleartext.getCipher()
+                );
             });
-
-            // cleartext._controlReleased = true;
 
             socket.cleartext = cleartext;
 
@@ -323,18 +317,18 @@ function connect (port, host, cb) {
             if (err.reason) {
                 log.logerror("client TLS error: " + err);
             }
-        });
+        })
 
         cleartext.on('secureConnect', function () {
             log.logdebug('client TLS secured.');
-            var cert = cleartext.getPeerCertificate();
-            if (cleartext.getCipher) {
-                var cipher = cleartext.getCipher();
-            }
-            if (cb2) cb2(cleartext.authorized, cleartext.authorizationError, cert, cipher);
+            if (cb2) cb2(
+                cleartext.authorized,
+                cleartext.authorizationError,
+                cleartext.getPeerCertificate(),
+                cleartext.getCipher()
+            );
         });
 
-        // cleartext._controlReleased = true;
         socket.cleartext = cleartext;
 
         if (socket._timeout) {
@@ -346,9 +340,9 @@ function connect (port, host, cb) {
         socket.attach(socket.cleartext);
 
         log.logdebug('client TLS upgrade in progress, awaiting secured.');
-    };
+    }
 
-    return (socket);
+    return socket;
 }
 
 exports.connect = connect;

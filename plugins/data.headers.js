@@ -50,18 +50,17 @@ exports.load_headers_ini = function () {
     });
 };
 
-exports.duplicate_singular = function(next, connection) {
+exports.duplicate_singular = function (next, connection) {
     var plugin = this;
     if (!plugin.cfg.check.duplicate_singular) { return next(); }
 
     // RFC 5322 Section 3.6, Headers that MUST be unique if present
     var singular = plugin.cfg.main.singular !== undefined ?
-                   plugin.cfg.main.singular.split(',') :
-    [
-        'Date', 'From', 'Sender', 'Reply-To', 'To', 'Cc',
-        'Bcc', 'Message-Id', 'In-Reply-To', 'References',
-        'Subject'
-    ];
+        plugin.cfg.main.singular.split(',') : [
+            'Date', 'From', 'Sender', 'Reply-To', 'To', 'Cc',
+            'Bcc', 'Message-Id', 'In-Reply-To', 'References',
+            'Subject'
+        ];
 
     var failures = [];
     for (var i=0; i < singular.length; i++ ) {
@@ -86,14 +85,14 @@ exports.duplicate_singular = function(next, connection) {
     return next();
 };
 
-exports.missing_required = function(next, connection) {
+exports.missing_required = function (next, connection) {
     var plugin = this;
     if (!plugin.cfg.check.missing_required) { return next(); }
 
     // Enforce RFC 5322 Section 3.6, Headers that MUST be present
     var required = plugin.cfg.main.required !== undefined ?
-                   plugin.cfg.main.required.split(',') :
-                   ['Date', 'From'];
+        plugin.cfg.main.required.split(',') :
+        ['Date', 'From'];
 
     var failures = [];
     for (var i=0; i < required.length; i++) {
@@ -115,7 +114,7 @@ exports.missing_required = function(next, connection) {
     return next();
 };
 
-exports.invalid_return_path = function(next, connection) {
+exports.invalid_return_path = function (next, connection) {
     var plugin = this;
     if (!plugin.cfg.check.invalid_return_path) { return next(); }
 
@@ -161,8 +160,8 @@ exports.invalid_date = function (next, connection) {
     msg_date = Date.parse(msg_date);
 
     var date_future_days = plugin.cfg.main.date_future_days !== undefined ?
-                           plugin.cfg.main.date_future_days :
-                           2;
+        plugin.cfg.main.date_future_days :
+        2;
 
     if (date_future_days > 0) {
         var too_future = new Date();
@@ -178,8 +177,8 @@ exports.invalid_date = function (next, connection) {
     }
 
     var date_past_days = plugin.cfg.main.date_past_days !== undefined ?
-                         plugin.cfg.main.date_past_days :
-                         15;
+        plugin.cfg.main.date_past_days :
+        15;
 
     if (date_past_days > 0) {
         var too_old = new Date();
@@ -354,8 +353,8 @@ exports.mailing_list = function (next, connection) {
         'Sender'             : [
             { mlm: 'majordomo',   start: 'owner-' },
         ],
-        'X-Mailman-Version'  : [ { mlm: 'mailman'   }, ],
-        'X-Majordomo-Version': [ { mlm: 'majordomo' }, ],
+        'X-Mailman-Version'  : [ { mlm: 'mailman'   } ],
+        'X-Majordomo-Version': [ { mlm: 'majordomo' } ],
         'X-Google-Loop'      : [ { mlm: 'googlegroups' } ],
     };
 
