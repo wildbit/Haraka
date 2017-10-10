@@ -30,6 +30,7 @@ class Body extends events.EventEmitter {
         this.state = 'start';
         this.buf = new Buffer(buf_siz);
         this.buf_fill = 0;
+        this.decode_accumulator = '';
     }
 }
 
