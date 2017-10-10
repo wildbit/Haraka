@@ -422,7 +422,7 @@ Body.prototype.parse_attachment = function (line) {
 Body.prototype.decode_qp = utils.decode_qp;
 
 Body.prototype.decode_base64 = function (line) {
-    let to_process = this.decode_accumulator + line.trim();
+    let to_process = this.decode_accumulator + line.trim().replace(/[\r\n]/g, '');
 
     // Sometimes base64 data lines will not be aligned with
     // byte boundaries. This is because each char in base64
