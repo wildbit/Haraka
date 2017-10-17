@@ -4,21 +4,15 @@
 // and passes back any errors seen on the ongoing server to the
 // originating server.
 
-var smtp_client_mod = require('./smtp_client');
+const url = require('url');
 
-// exported so tests can override config dir
-// exports.get_net_utils = function () {
-//     return require('haraka-net-utils');
-// }
-
-exports.net_utils = require('haraka-net-utils');
+const smtp_client_mod = require('./smtp_client');
 
 exports.register = function () {
-    var plugin = this;
+    const plugin = this;
     plugin.load_errs = [];
 
     plugin.load_smtp_forward_ini();
-    plugin.make_tls_opts();
 
     if (plugin.load_errs.length > 0) return;
 
@@ -37,48 +31,8 @@ exports.register = function () {
     }
 };
 
-exports.make_tls_opts = function () {
-    var plugin = this;
-    var tls_options = {};
-
-    if (plugin.cfg.main.enable_tls === true) {
-
-        var tls = plugin.net_utils.load_tls_ini();
-        if (!tls.outbound) { return; }
-
-        var tlsCfg = tls.outbound;
-
-        var config_options = [
-            'ciphers', 'requestCert', 'rejectUnauthorized',
-            'key', 'cert', 'honorCipherOrder', 'ecdhCurve', 'dhparam',
-            'secureProtocol', 'enableOCSPStapling'
-        ];
-
-        for (let i = 0; i < config_options.length; i++) {
-            let opt = config_options[i];
-            if (tlsCfg[opt] === undefined) continue;
-
-            if (opt === 'key' || opt === 'cert') {
-                var pem = plugin.config.get(tlsCfg[opt], 'binary');
-                if (!pem) {
-                    var msg = "tls " + opt + " " + tlsCfg[opt] + " could not be loaded.";
-                    this.load_errs.push(msg);
-                    this.logcrit(msg + " See 'haraka -h queue/smtp_forward'");
-                }
-
-                tls_options[opt] = pem;
-            }
-            else {
-                tls_options[opt] = tlsCfg[opt];
-            }
-        }
-    }
-
-    this.tls_options = tls_options;
-}
-
 exports.load_smtp_forward_ini = function () {
-    var plugin = this;
+    const plugin = this;
 
     plugin.cfg = plugin.config.get('smtp_forward.ini', {
         booleans: [
@@ -96,11 +50,11 @@ exports.load_smtp_forward_ini = function () {
 };
 
 exports.get_config = function (connection) {
-    var plugin = this;
+    const plugin = this;
 
     if (!connection.transaction) return plugin.cfg.main;
     if (!connection.transaction.rcpt_to[0]) return plugin.cfg.main;
-    var dom = connection.transaction.rcpt_to[0].host;
+    const dom = connection.transaction.rcpt_to[0].host;
 
     if (!dom)             return plugin.cfg.main;
     if (!plugin.cfg[dom]) return plugin.cfg.main;  // no specific route
@@ -109,17 +63,17 @@ exports.get_config = function (connection) {
 };
 
 exports.check_sender = function (next, connection, params) {
-    var plugin = this;
-    var txn = connection.transaction;
+    const plugin = this;
+    const txn = connection.transaction;
     if (!txn) return;
 
-    var email = params[0].address();
+    const email = params[0].address();
     if (!email) {
         txn.results.add(plugin, {skip: 'mail_from.null', emit: true});
         return next();
     }
 
-    var domain = params[0].host.toLowerCase();
+    const domain = params[0].host.toLowerCase();
     if (!plugin.cfg[domain]) return next();
 
     // domain is defined in smtp_forward.ini
@@ -135,25 +89,32 @@ exports.check_sender = function (next, connection, params) {
 };
 
 exports.set_queue = function (connection, queue_wanted, domain) {
-    var plugin = this;
+    const plugin = this;
 
-    var dom_cfg = plugin.cfg[domain];
+    let dom_cfg = plugin.cfg[domain];
     if (dom_cfg === undefined) dom_cfg = {};
 
     if (!queue_wanted) queue_wanted = dom_cfg.queue || plugin.cfg.main.queue;
     if (!queue_wanted) return true;
 
-    var dst_host = dom_cfg.host || plugin.cfg.main.host;
-    if (dst_host) queue_wanted += ':' + dst_host;
+    let dst_host = dom_cfg.host || plugin.cfg.main.host;
+    if (dst_host) dst_host = `smtp://${dst_host}`;
 
-    if (!connection.transaction.notes.queue) {
-        connection.transaction.notes.queue = queue_wanted;
+    const notes = connection.transaction.notes;
+    if (!notes.get('queue.wants')) {
+        notes.set('queue.wants', queue_wanted);
+        if (dst_host) {
+            notes.set('queue.next_hop', dst_host);
+        }
         return true;
     }
 
     // multiple recipients with same destination
-    if (connection.transaction.notes.queue === queue_wanted) {
-        return true;
+    if (notes.get('queue.wants') === queue_wanted) {
+        if (!dst_host) return true;
+        const next_hop = notes.get('queue.next_hop');
+        if (!next_hop) return true;
+        if (next_hop === dst_host) return true;
     }
 
     // multiple recipients with different forward host, soft deny
@@ -161,11 +122,11 @@ exports.set_queue = function (connection, queue_wanted, domain) {
 }
 
 exports.check_recipient = function (next, connection, params) {
-    var plugin = this;
-    var txn = connection.transaction;
+    const plugin = this;
+    const txn = connection.transaction;
     if (!txn) return;
 
-    var rcpt = params[0];
+    const rcpt = params[0];
     if (!rcpt.host) {
         txn.results.add(plugin, {skip: 'rcpt!domain'});
         return next();
@@ -177,7 +138,7 @@ exports.check_recipient = function (next, connection, params) {
         return next(OK);
     }
 
-    var domain = rcpt.host.toLowerCase();
+    const domain = rcpt.host.toLowerCase();
     if (plugin.cfg[domain] !== undefined) {
         if (plugin.set_queue(connection, 'smtp_forward', domain)) {
             txn.results.add(plugin, {pass: 'rcpt_to'});
@@ -194,7 +155,7 @@ exports.check_recipient = function (next, connection, params) {
 };
 
 exports.auth = function (cfg, connection, smtp_client) {
-    var plugin = this;
+    const plugin = this;
 
     connection.loginfo(plugin, 'Configuring authentication for SMTP server ' + cfg.host + ':' + cfg.port);
     smtp_client.on('capabilities', function () {
@@ -208,8 +169,8 @@ exports.auth = function (cfg, connection, smtp_client) {
             }
         }
 
-        var base64 = function (str) {
-            var buffer = new Buffer(str, 'UTF-8');
+        const base64 = function (str) {
+            const buffer = new Buffer(str, 'UTF-8');
             return buffer.toString('base64');
         };
 
@@ -237,18 +198,21 @@ exports.auth = function (cfg, connection, smtp_client) {
 }
 
 exports.queue_forward = function (next, connection) {
-    var plugin = this;
-    var txn = connection.transaction;
+    const plugin = this;
+    const txn = connection.transaction;
 
-    if (txn.notes.queue && !/^smtp_forward/.test(txn.notes.queue))
+    const q_wants = txn.notes.get('queue.wants');
+    if (q_wants && q_wants !== 'smtp_forward') {
+        connection.logdebug(plugin, `skipping, unwanted (${q_wants})`);
         return next();
+    }
 
-    var cfg = plugin.get_config(connection);
+    const cfg = plugin.get_config(connection);
 
     smtp_client_mod.get_client_plugin(plugin, connection, cfg, function (err, smtp_client) {
         smtp_client.next = next;
 
-        var rcpt = 0;
+        let rcpt = 0;
 
         if (cfg.auth_user) plugin.auth(cfg, connection, smtp_client);
 
@@ -256,18 +220,20 @@ exports.queue_forward = function (next, connection) {
             (cfg.forwarding_host_pool ? "host_pool" : cfg.host + ':' + cfg.port)
         );
 
-        var dead_sender = function () {
+        function get_rs () {
+            if (connection.transaction) return connection.transaction.results;
+            return connection.results;
+        }
+
+        const dead_sender = function () {
             if (smtp_client.is_dead_sender(plugin, connection)) {
-                var rs = connection.transaction ?
-                    connection.transaction.results :
-                    connection.results;
-                rs.add(plugin, { err: 'dead sender' });
+                get_rs().add(plugin, { err: 'dead sender' });
                 return true;
             }
             return false;
-        };
+        }
 
-        var send_rcpt = function () {
+        const send_rcpt = function () {
             if (dead_sender()) return;
             if (rcpt === txn.rcpt_to.length) {
                 smtp_client.send_command('DATA');
@@ -275,7 +241,7 @@ exports.queue_forward = function (next, connection) {
             }
             smtp_client.send_command('RCPT', 'TO:' + txn.rcpt_to[rcpt].format(!smtp_client.smtp_utf8));
             rcpt++;
-        };
+        }
 
         smtp_client.on('mail', send_rcpt);
 
@@ -295,6 +261,7 @@ exports.queue_forward = function (next, connection) {
 
         smtp_client.on('dot', function () {
             if (dead_sender()) return;
+            get_rs().add(plugin, { pass: smtp_client.response });
             if (rcpt < txn.rcpt_to.length) {
                 smtp_client.send_command('RSET');
                 return;
@@ -317,8 +284,28 @@ exports.queue_forward = function (next, connection) {
     });
 };
 
+exports.get_mx_next_hop = function (next_hop) {
+    const dest = url.parse(next_hop);
+    const mx = {
+        priority: 0,
+        port: dest.port || 25,
+        exchange: dest.hostname,
+    }
+    if (dest.auth) {
+        mx.auth_type = 'plain';
+        mx.auth_user = dest.auth.split(':')[0];
+        mx.auth_pass = dest.auth.split(':')[1];
+    }
+    return mx;
+}
+
 exports.get_mx = function (next, hmail, domain) {
-    var plugin = this;
+    const plugin = this;
+
+    // hmail.todo not defined in tests.
+    if (hmail.todo.notes.next_hop) {
+        return next(OK, plugin.get_mx_next_hop(hmail.todo.notes.next_hop));
+    }
 
     if (domain !== domain.toLowerCase()) domain = domain.toLowerCase();
 
@@ -327,12 +314,12 @@ exports.get_mx = function (next, hmail, domain) {
         return next();
     }
 
-    var mx_opts = [
+    const mx_opts = [
         'auth_type', 'auth_user', 'auth_pass', 'bind', 'bind_helo',
         'using_lmtp'
     ]
 
-    var mx = {
+    const mx = {
         priority: 0,
         exchange: plugin.cfg[domain].host || plugin.cfg.main.host,
         port: plugin.cfg[domain].port || plugin.cfg.main.port || 25,

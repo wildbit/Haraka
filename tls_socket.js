@@ -1,22 +1,25 @@
 'use strict';
-/*----------------------------------------------------------------------------------------------*/
-/* Obtained and modified from http://js.5sh.net/starttls.js on 8/18/2011.                       */
-/*----------------------------------------------------------------------------------------------*/
+/*--------------------------------------------------------------------------*/
+/* Obtained and modified from http://js.5sh.net/starttls.js on 8/18/2011.   */
+/*--------------------------------------------------------------------------*/
 
-var tls       = require('tls');
-var util      = require('util');
-var net       = require('net');
-var stream    = require('stream');
-var log       = require('./logger');
-var EventEmitter = require('events');
+const async     = require('async');
+const tls       = require('tls');
+const util      = require('util');
+const net       = require('net');
+const openssl   = require('openssl-wrapper').exec;
+const path      = require('path');
+const spawn     = require('child_process').spawn;
+const stream    = require('stream');
 
-var ocsp;
-try {
-    ocsp = require('ocsp');
-}
-catch (er) {
-    log.lognotice("Can't load module ocsp. OCSP Stapling not available.");
-}
+exports.config  = require('haraka-config');  // exported for tests
+
+const log       = require('./logger');
+
+const certsByHost = {};
+const ctxByHost = {};
+let ocsp;
+let ocspCache;
 
 // provides a common socket for attaching
 // and detaching from either main socket, or crypto socket
@@ -48,12 +51,12 @@ pluggableStream.prototype.resume = function () {
 };
 
 pluggableStream.prototype.attach = function (socket) {
-    var self = this;
+    const self = this;
     self.targetsocket = socket;
     self.targetsocket.on('data', function (data) {
         self.emit('data', data);
     });
-    self.targetsocket.on('connect', function (a, b) {
+    self.targetsocket.on('connect', (a, b) => {
         self.emit('connect', a, b);
     });
     self.targetsocket.on('secureConnection', function (a, b) {
@@ -146,6 +149,344 @@ pluggableStream.prototype.setTimeout = function (timeout) {
     return this.targetsocket.setTimeout(timeout);
 };
 
+exports.parse_x509_names = function (string) {
+    // receives the text value of a x509 certificate and returns an array of
+    // of names extracted from the Subject CN and the v3 Subject Alternate Names
+    const names_found = [];
+
+    // log.loginfo(string);
+
+    let match = /Subject:.*?CN=([^/\s]+)/.exec(string);
+    if (match) {
+        // log.loginfo(match[0]);
+        if (match[1]) {
+            // log.loginfo(match[1]);
+            names_found.push(match[1]);
+        }
+    }
+
+    match = /X509v3 Subject Alternative Name:[^]*X509/.exec(string);
+    if (match) {
+        let dns_name;
+        const re = /DNS:([^,]+)[,\n]/g;
+        while ((dns_name = re.exec(match[0])) !== null) {
+            // log.loginfo(dns_name);
+            if (names_found.indexOf(dns_name[1]) !== -1) continue; // ignore dupes
+            names_found.push(dns_name[1]);
+        }
+    }
+
+    return names_found;
+}
+
+exports.parse_x509_expire = function (file, string) {
+
+    const dateMatch = /Not After : (.*)/.exec(string);
+    if (!dateMatch) return;
+
+    // log.loginfo(dateMatch[1]);
+    return new Date(dateMatch[1]);
+}
+
+exports.parse_x509 = function (string) {
+    const res = {};
+
+    const match = /^([^-]*)?([-]+BEGIN (?:\w+\s)?PRIVATE KEY[-]+[^-]+[-]+END (?:\w+\s)?PRIVATE KEY[-]+\n)([^]*)$/.exec(string);
+    if (!match) return res;
+
+    if (match[1] && match[1].length) {
+        log.logerror('leading garbage');
+        log.logerror(match[1]);
+    }
+    if (!match[2] || !match[2].length) return res;
+    res.key = Buffer.from(match[2]);
+
+    if (!match[3] || !match[3].length) return res;
+    res.cert = Buffer.from(match[3]);
+
+    return res;
+}
+
+exports.load_tls_ini = function () {
+    const tlss = this;
+
+    log.loginfo('loading tls.ini');
+
+    const cfg = exports.config.get('tls.ini', {
+        booleans: [
+            '-redis.disable_for_failed_hosts',
+
+            // wildcards match in any section and are not initialized
+            '*.requestCert',
+            '*.rejectUnauthorized',
+            '*.honorCipherOrder' ,
+            '*.enableOCSPStapling',
+            '*.requestOCSP',
+
+            // explicitely declared booleans are initialized
+            '+main.requestCert',
+            '-main.rejectUnauthorized',
+            '+main.honorCipherOrder',
+            '-main.requestOCSP',
+        ]
+    }, function () {
+        tlss.load_tls_ini();
+    });
+
+    if (!cfg.no_tls_hosts) cfg.no_tls_hosts = {};
+
+    if (cfg.main.enableOCSPStapling !== undefined) {
+        log.logerror('deprecated setting enableOCSPStapling in tls.ini');
+        cfg.main.requestOCSP = cfg.main.enableOCSPStapling;
+    }
+
+    if (ocsp === undefined && cfg.main.requestOCSP) {
+        try {
+            ocsp = require('ocsp');
+            log.logdebug('ocsp loaded');
+            ocspCache = new ocsp.Cache();
+        }
+        catch (ignore) {
+            log.lognotice("OCSP Stapling not available.");
+        }
+    }
+
+    tlss.cfg = cfg;
+
+    tlss.applySocketOpts('*');
+    tlss.load_default_opts();
+
+    return cfg;
+}
+
+exports.saveOpt = function (name, opt, val) {
+    if (certsByHost[name] === undefined) certsByHost[name] = {};
+    certsByHost[name][opt] = val;
+}
+
+exports.applySocketOpts = function (name) {
+    const tlss = this;
+
+    if (!certsByHost[name]) certsByHost[name] = {};
+
+    // https://nodejs.org/api/tls.html#tls_new_tls_tlssocket_socket_options
+    const TLSSocketOptions = [
+        // 'server'        // manually added
+        'isServer', 'requestCert',  'rejectUnauthorized',
+        'NPNProtocols', 'ALPNProtocols', 'session',
+        'requestOCSP',  'secureContext', 'SNICallback'
+    ];
+
+    // https://nodejs.org/api/tls.html#tls_tls_createsecurecontext_options
+    const createSecureContextOptions = [
+        'key', 'cert', 'dhparam',
+        'pfx', 'passphrase', 'ca', 'crl', 'ciphers', 'honorCipherOrder',
+        'ecdhCurve', 'secureProtocol', 'secureOptions', 'sessionIdContext'
+    ];
+
+    const allOpts = TLSSocketOptions.concat(createSecureContextOptions);
+
+    allOpts.forEach(opt => {
+
+        if (tlss.cfg[name] && tlss.cfg[name][opt] !== undefined) {
+            // if the setting exists in tls.ini [name]
+            tlss.saveOpt(name, opt, tlss.cfg[name][opt]);
+            return;
+        }
+
+        if (tlss.cfg.main[opt] !== undefined) {
+            // if the setting exists in tls.ini [main]
+            // then save it to the certsByHost options
+            tlss.saveOpt(name, opt, tlss.cfg.main[opt]);
+            return;
+        }
+
+        // defaults
+        switch (opt) {
+            case 'sessionIdContext':
+                tlss.saveOpt(name, opt, 'haraka');
+                break;
+            case 'isServer':
+                tlss.saveOpt(name, opt, true);
+                break;
+            case 'key':
+                tlss.saveOpt(name, opt, 'tls_key.pem');
+                break;
+            case 'cert':
+                tlss.saveOpt(name, opt, 'tls_cert.pem');
+                break;
+            case 'dhparam':
+                tlss.saveOpt(name, opt, 'dhparams.pem');
+                break;
+            case 'SNICallback':
+                tlss.saveOpt(name, opt, SNICallback);
+                break;
+        }
+    })
+}
+
+exports.load_default_opts = function () {
+    const tlss = this;
+
+    const cfg = certsByHost['*'];
+
+    if (cfg.dhparam && typeof cfg.dhparam === 'string') {
+        log.logdebug(`loading dhparams from ${cfg.dhparam}`);
+        tlss.saveOpt('*', 'dhparam', tlss.config.get(cfg.dhparam, 'binary'));
+    }
+
+    // make non-array key/cert option into Arrays with one entry
+    if (!(Array.isArray(cfg.key ))) cfg.key  = [cfg.key];
+    if (!(Array.isArray(cfg.cert))) cfg.cert = [cfg.cert];
+
+    if (cfg.key.length != cfg.cert.length) {
+        log.logerror("number of keys (" + cfg.key.length +
+            ") not equal to certs (" + cfg.cert.length + ").");
+    }
+
+    // if key file has already been loaded, it'll be a Buffer.
+    if (typeof cfg.key[0] === 'string') {
+        // turn key/cert file names into actual key/cert binary data
+        const asArray = cfg.key.map(keyFileName => {
+            if (!keyFileName) return;
+            const key = tlss.config.get(keyFileName, 'binary');
+            if (!key) {
+                log.logerror("tls key " + keyFileName + " could not be loaded.");
+                log.logerror(tlss.config);
+            }
+            return key;
+        })
+        tlss.saveOpt('*', 'key', asArray);
+    }
+
+    if (typeof cfg.cert[0] === 'string') {
+        const asArray = cfg.cert.map(certFileName => {
+            if (!certFileName) return;
+            const cert = tlss.config.get(certFileName, 'binary');
+            if (!cert) {
+                log.logerror("tls cert " + certFileName + " could not be loaded.");
+            }
+            return cert;
+        })
+        tlss.saveOpt('*', 'cert', asArray);
+    }
+
+    if (cfg.cert[0] && cfg.key[0]) {
+        tlss.tls_valid = true;
+
+        // now that all opts are applied, generate TLS context
+        tlss.ensureDhparams(() => {
+            ctxByHost['*'] = tls.createSecureContext(cfg);
+        })
+    }
+}
+
+function SNICallback (servername, sniDone) {
+    log.logdebug('SNI servername: ' + servername);
+
+    if (ctxByHost[servername] === undefined) servername = '*';
+
+    sniDone(null, ctxByHost[servername]);
+}
+
+exports.get_certs_dir = function (tlsDir, done) {
+    const tlss = this;
+
+    tlss.config.getDir(tlsDir, {}, (iterErr, files) => {
+        if (iterErr) return done(iterErr);
+
+        async.map(files, (file, iter_done) => {
+
+            const parsed = exports.parse_x509(file.data.toString());
+            if (!parsed.key) {
+                return iter_done('no PRIVATE key in ' + file.path);
+            }
+            if (!parsed.cert) {
+                log.logerror('no CERT in ' + file.path);
+                return iter_done('no CERT in ' + file.path);
+            }
+
+            const x509args = { noout: true, text: true };
+
+            openssl('x509', parsed.cert, x509args, function (e, as_str) {
+                if (e) {
+                    log.logerror(`BAD TLS in ${file.path}`);
+                    log.logerror(e);
+                }
+
+                const expire = tlss.parse_x509_expire(file, as_str);
+                if (expire && expire < new Date()) {
+                    log.logerror(file.path + ' expired on ' + expire);
+                }
+
+                iter_done(null, {
+                    err: e,
+                    file: path.basename(file.path),
+                    key: parsed.key,
+                    cert: parsed.cert,
+                    names: tlss.parse_x509_names(as_str),
+                    expires: expire,
+                })
+            })
+        },
+        (finalErr, certs) => {
+
+            if (finalErr) log.logerror(finalErr);
+
+            if (!certs || !certs.length) {
+                log.loginfo('0 TLS certs in config/tls');
+                return done(null, certs);
+            }
+
+            certs.forEach(cert => {
+                if (cert.err) {
+                    log.logerror(`${cert.file} had error: ${cert.err.message}`);
+                }
+
+                log.logdebug(cert);
+                cert.names.forEach(name => {
+                    tlss.applySocketOpts(name);
+
+                    tlss.saveOpt(name, 'cert', cert.cert);
+                    tlss.saveOpt(name, 'key', cert.key);
+                    if (certsByHost['*'] !== undefined && certsByHost['*'].dhparam) {
+                        // copy in dhparam from default '*' TLS config
+                        tlss.saveOpt(name, 'dhparam', certsByHost['*'].dhparam);
+                    }
+
+                    // now that all opts are applied, generate TLS context
+                    ctxByHost[name] = tls.createSecureContext(certsByHost[name]);
+                })
+            })
+
+            // log.loginfo(exports.certsByHost);
+            done(null, exports.certsByHost);
+        })
+    })
+}
+
+exports.getSocketOpts = function (name, done) {
+    const tlss = this;
+
+    function getTlsOpts () {
+        if (certsByHost[name]) {
+            // log.logdebug(certsByHost[name]);
+            return done(certsByHost[name]);
+        }
+        // log.logdebug(certsByHost['*']);
+        done(certsByHost['*']);
+    }
+
+    // startup time, load the config/tls dir
+    if (!certsByHost['*']) {
+        tlss.load_tls_ini();
+        tlss.get_certs_dir('tls', getTlsOpts);
+        return;
+    }
+
+    getTlsOpts();
+}
+
 function pipe (cleartext, socket) {
     cleartext.socket = socket;
 
@@ -161,112 +502,133 @@ function pipe (cleartext, socket) {
     socket.on('close', onclose);
 }
 
-class pseudoTLSServer extends EventEmitter {
-    constructor () {
-        super();
+exports.ensureDhparams = function (done) {
+    const tlss = this;
+
+    // empty/missing dhparams file
+    if (certsByHost['*'].dhparam) {
+        return done(null, certsByHost['*'].dhparam);
     }
+
+    const filePath = tlss.cfg.main.dhparam || 'dhparams.pem';
+    const fpResolved = path.resolve(exports.config.root_path, filePath);
+
+    log.loginfo(`Generating a 2048 bit dhparams file at ${fpResolved}`);
+
+    const o = spawn('openssl', ['dhparam', '-out', `${fpResolved}`, '2048']);
+    o.stdout.on('data', data => {
+        // normally empty output
+        log.logdebug(data);
+    })
+
+    o.stderr.on('data', data => {
+        // this is the status gibberish `openssl dhparam` spews as it works
+    })
+
+    o.on('close', code => {
+        if (code !== 0) {
+            return done('Error code: ' + code);
+        }
+
+        log.loginfo(`Saved to ${fpResolved}`);
+        const content = tlss.config.get(filePath, 'binary');
+
+        tlss.saveOpt('*', 'dhparam', content);
+        done(null, certsByHost['*'].dhparam);
+    });
 }
 
-if (ocsp) {
+exports.addOCSP = function (server) {
+    if (!ocsp) {
+        log.logdebug('addOCSP: not available');
+        return;
+    }
 
-    var ocspCache = new ocsp.Cache();
-    var pseudoServ = new pseudoTLSServer();
+    if (server.listenerCount('OCSPRequest') > 0) {
+        log.logdebug('OCSPRequest already listening');
+        return;
+    }
 
-    pseudoServ.on('OCSPRequest', function (cert, issuer, cb2) {
+    log.logdebug('adding OCSPRequest listener');
+    server.on('OCSPRequest', function (cert, issuer, ocr_cb) {
+        log.logdebug('OCSPRequest: ' + cert);
         ocsp.getOCSPURI(cert, function (err, uri) {
             log.logdebug('OCSP Request, URI: ' + uri + ', err=' +err);
-            if (err) {
-                return cb2(err);
-            }
-            if (uri === null) {   // not working OCSP server
-                return cb2();
-            }
+            if (err) return ocr_cb(err);
+            if (uri === null) return ocr_cb();  // not working OCSP server
 
-            var req = ocsp.request.generate(cert, issuer);
-            var options = {
-                url: uri,
-                ocsp: req.data
-            };
+            const req = ocsp.request.generate(cert, issuer);
 
             // look for a cached value first
-            ocspCache.probe(req.id, function (_x, result) {
-                log.logdebug('OCSP cache result: ' + util.inspect(result));
-                if (result) {
-                    cb2(_x, result.response);
-                } else {
-                    log.logdebug('OCSP req:' + util.inspect(req));
-                    ocspCache.request(req.id, options, cb2);
-                }
-            });
-        });
-    });
+            ocspCache.probe(req.id, function (err2, cached) {
+                if (err2) return ocr_cb(err2);
 
-    exports.shutdown = function () {
-        log.logdebug('Cleaning ocspCache. How many keys? ' + Object.keys(ocspCache.cache).length);
-        Object.keys(ocspCache.cache).forEach(function (key) {
-            var e = ocspCache.cache[key];
-            clearTimeout(e.timer);
-        });
-    };
+                if (cached) {
+                    log.logdebug('OCSP cache: ' + util.inspect(cached));
+                    return ocr_cb(err2, cached.response);
+                }
+
+                const options = {
+                    url: uri,
+                    ocsp: req.data
+                };
+
+                log.logdebug('OCSP req:' + util.inspect(req));
+                ocspCache.request(req.id, options, ocr_cb);
+            })
+        })
+    })
 }
 
+exports.shutdown = function () {
+    if (ocsp) cleanOcspCache();
+}
+
+function cleanOcspCache () {
+    log.logdebug('Cleaning ocspCache. How many keys? ' + Object.keys(ocspCache.cache).length);
+    Object.keys(ocspCache.cache).forEach(function (key) {
+        clearTimeout(ocspCache.cache[key].timer);
+    });
+}
+
+exports.certsByHost = certsByHost;
 exports.ocsp = ocsp;
 
-function _getSecureContext (options) {
-    if (options === undefined) options = {};
-
-    if (options.requestCert === undefined) options.requestCert = true;
-
-    if (options.rejectUnauthorized === undefined) {
-        options.rejectUnauthorized = false;
-    }
-
-    if (!options.sessionIdContext) options.sessionIdContext = 'haraka';
-    // if (!options.sessionTimeout) options.sessionTimeout = 1;
-
-    return tls.createSecureContext(options);
-}
-
 function createServer (cb) {
-    var serv = net.createServer(function (cryptoSocket) {
+    const server = net.createServer(function (cryptoSocket) {
 
-        var socket = new pluggableStream(cryptoSocket);
+        const socket = new pluggableStream(cryptoSocket);
 
-        socket.upgrade = function (options, cb2) {
+        exports.addOCSP(server);
+
+        socket.upgrade = function (cb2) {
             log.logdebug('Upgrading to TLS');
 
             socket.clean();
+
             cryptoSocket.removeAllListeners('data');
 
-            if (!options) options = {};
-            options.isServer = true;
+            const options = Object.assign({}, certsByHost['*']);
+            options.server = server;  // TLSSocket needs server for SNI to work
 
-            if (!options.secureContext) {
-                options.secureContext = _getSecureContext(options);
-            }
-
-            if (options.enableOCSPStapling && ocsp) {
-                options.server = pseudoServ;
-                pseudoServ._sharedCreds = options.secureContext;
-            }
-
-            var cleartext = new tls.TLSSocket(cryptoSocket, options);
+            const cleartext = new tls.TLSSocket(cryptoSocket, options);
 
             pipe(cleartext, cryptoSocket);
 
-            cleartext.on('error', function (exception) {
-                socket.emit('error', exception);
-            });
-
-            cleartext.on('secure', function () {
-                log.logdebug('TLS secured.');
-                socket.emit('secure');
-                if (cb2) cb2(cleartext.authorized,
-                    cleartext.authorizationError,
-                    cleartext.getPeerCertificate(),
-                    cleartext.getCipher()
-                );
-            });
+            cleartext
+                .on('error', (exception) => {
+                    socket.emit('error', exception);
+                })
+                .on('secure', function () {
+                    log.logdebug('TLS secured.');
+                    socket.emit('secure');
+                    if (cb2) cb2(
+                        cleartext.authorized,
+                        cleartext.authorizationError,
+                        cleartext.getPeerCertificate(),
+                        cleartext.getCipher()
+                    );
+                })
 
             socket.cleartext = cleartext;
 
@@ -282,11 +644,11 @@ function createServer (cb) {
         cb(socket);
     });
 
-    return serv;
+    return server;
 }
 
 function connect (port, host, cb) {
-    var conn_options = {};
+    let conn_options = {};
     if (typeof port === 'object') {
         conn_options = port;
         cb = host;
@@ -296,20 +658,18 @@ function connect (port, host, cb) {
         conn_options.host = host;
     }
 
-    var cryptoSocket = net.connect(conn_options);
+    const cryptoSocket = net.connect(conn_options);
 
-    var socket = new pluggableStream(cryptoSocket);
+    const socket = new pluggableStream(cryptoSocket);
 
     socket.upgrade = function (options, cb2) {
         socket.clean();
         cryptoSocket.removeAllListeners('data');
 
-        if (!options) options = {};
-
-        options.secureContext = _getSecureContext(options);
+        options = Object.assign(options, certsByHost['*']);
         options.socket = cryptoSocket;
 
-        var cleartext = new tls.connect(options);
+        const cleartext = new tls.connect(options);
 
         pipe(cleartext, cryptoSocket);
 
